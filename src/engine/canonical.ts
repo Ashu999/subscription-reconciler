@@ -1,27 +1,13 @@
 import type {
+  CanonicalEntitlementForDomain,
   CanonicalEntitlementSource,
   EntitlementReason,
   EntitlementSource,
-  SourceEntitlement,
+  SourceEntitlementForDomain,
 } from '../db/types.js';
 
-export interface SourceEntitlementState {
-  userId: string;
-  source: EntitlementSource;
-  active: boolean;
-  expiresAt: Date | null;
-  lastChangedAt: Date;
-  reason: EntitlementReason;
-}
-
-export interface CanonicalEntitlementState {
-  userId: string;
-  active: boolean;
-  source: CanonicalEntitlementSource;
-  expiresAt: Date | null;
-  lastChangedAt: Date | null;
-  reason: EntitlementReason;
-}
+export type SourceEntitlementState = SourceEntitlementForDomain;
+export type CanonicalEntitlementState = CanonicalEntitlementForDomain;
 
 const SOURCE_PRECEDENCE: Record<EntitlementSource, number> = {
   STORE: 0,
@@ -86,17 +72,6 @@ export function resolveCanonical(
     expiresAt: null,
     lastChangedAt: latestRow.lastChangedAt,
     reason: latestRow.reason,
-  };
-}
-
-export function toSourceEntitlementState(row: SourceEntitlement): SourceEntitlementState {
-  return {
-    userId: row.user_id,
-    source: row.source,
-    active: row.active,
-    expiresAt: row.expires_at,
-    lastChangedAt: row.last_changed_at,
-    reason: row.reason,
   };
 }
 

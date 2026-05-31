@@ -82,22 +82,187 @@ export interface Database {
   carrier_poll_locks: CarrierPollLocksTable;
 }
 
-export type SourceEntitlement = Selectable<SourceEntitlementsTable>;
-export type NewSourceEntitlement = Insertable<SourceEntitlementsTable>;
-export type SourceEntitlementUpdate = Updateable<SourceEntitlementsTable>;
+export type SelectableSourceEntitlement = Selectable<SourceEntitlementsTable>;
+export type InsertableSourceEntitlement = Insertable<SourceEntitlementsTable>;
+export type UpdateableSourceEntitlement = Updateable<SourceEntitlementsTable>;
+export type SourceEntitlement = SelectableSourceEntitlement;
+export type NewSourceEntitlement = InsertableSourceEntitlement;
+export type SourceEntitlementUpdate = UpdateableSourceEntitlement;
 
-export type CanonicalEntitlement = Selectable<CanonicalEntitlementsTable>;
-export type NewCanonicalEntitlement = Insertable<CanonicalEntitlementsTable>;
-export type CanonicalEntitlementUpdate = Updateable<CanonicalEntitlementsTable>;
+export type SelectableCanonicalEntitlement = Selectable<CanonicalEntitlementsTable>;
+export type InsertableCanonicalEntitlement = Insertable<CanonicalEntitlementsTable>;
+export type UpdateableCanonicalEntitlement = Updateable<CanonicalEntitlementsTable>;
+export type CanonicalEntitlement = SelectableCanonicalEntitlement;
+export type NewCanonicalEntitlement = InsertableCanonicalEntitlement;
+export type CanonicalEntitlementUpdate = UpdateableCanonicalEntitlement;
 
-export type StoreEvent = Selectable<StoreEventsTable>;
-export type NewStoreEvent = Insertable<StoreEventsTable>;
-export type StoreEventUpdate = Updateable<StoreEventsTable>;
+export type SelectableStoreEvent = Selectable<StoreEventsTable>;
+export type InsertableStoreEvent = Insertable<StoreEventsTable>;
+export type UpdateableStoreEvent = Updateable<StoreEventsTable>;
+export type StoreEvent = SelectableStoreEvent;
+export type NewStoreEvent = InsertableStoreEvent;
+export type StoreEventUpdate = UpdateableStoreEvent;
 
-export type Notification = Selectable<NotificationsTable>;
-export type NewNotification = Insertable<NotificationsTable>;
-export type NotificationUpdate = Updateable<NotificationsTable>;
+export type SelectableNotification = Selectable<NotificationsTable>;
+export type InsertableNotification = Insertable<NotificationsTable>;
+export type UpdateableNotification = Updateable<NotificationsTable>;
+export type Notification = SelectableNotification;
+export type NewNotification = InsertableNotification;
+export type NotificationUpdate = UpdateableNotification;
 
-export type CarrierPollLock = Selectable<CarrierPollLocksTable>;
-export type NewCarrierPollLock = Insertable<CarrierPollLocksTable>;
-export type CarrierPollLockUpdate = Updateable<CarrierPollLocksTable>;
+export type SelectableCarrierPollLock = Selectable<CarrierPollLocksTable>;
+export type InsertableCarrierPollLock = Insertable<CarrierPollLocksTable>;
+export type UpdateableCarrierPollLock = Updateable<CarrierPollLocksTable>;
+export type CarrierPollLock = SelectableCarrierPollLock;
+export type NewCarrierPollLock = InsertableCarrierPollLock;
+export type CarrierPollLockUpdate = UpdateableCarrierPollLock;
+
+export interface SourceEntitlementForDomain {
+  userId: string;
+  source: EntitlementSource;
+  active: boolean;
+  expiresAt: Date | null;
+  lastChangedAt: Date;
+  reason: EntitlementReason;
+}
+
+export interface CanonicalEntitlementForDomain {
+  userId: string;
+  active: boolean;
+  source: CanonicalEntitlementSource;
+  expiresAt: Date | null;
+  lastChangedAt: Date | null;
+  reason: EntitlementReason;
+}
+
+export interface StoreEventForDomain {
+  eventId: string;
+  userId: string;
+  type: StoreEventType;
+  eventTimeMs: number;
+  productId: ProductId;
+  receivedAt: Date;
+}
+
+export interface CanonicalEntitlementResponse {
+  active: boolean;
+  source: CanonicalEntitlementSource;
+  expiresAt: string | null;
+  lastChangedAt: string | null;
+  reason: EntitlementReason;
+}
+
+const MIN_JS_DATE_MS = -8_640_000_000_000_000;
+const MAX_JS_DATE_MS = 8_640_000_000_000_000;
+const MIN_SAFE_INTEGER_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+export function mapSourceEntitlementForDomain(
+  row: SourceEntitlement,
+): SourceEntitlementForDomain {
+  return {
+    userId: row.user_id,
+    source: row.source,
+    active: row.active,
+    expiresAt: row.expires_at,
+    lastChangedAt: row.last_changed_at,
+    reason: row.reason,
+  };
+}
+
+export function mapCanonicalEntitlementForDomain(
+  row: CanonicalEntitlement,
+): CanonicalEntitlementForDomain {
+  return {
+    userId: row.user_id,
+    active: row.active,
+    source: row.source,
+    expiresAt: row.expires_at,
+    lastChangedAt: row.last_changed_at,
+    reason: row.reason,
+  };
+}
+
+export function mapStoreEventForDomain(row: StoreEvent): StoreEventForDomain {
+  return {
+    eventId: row.event_id,
+    userId: row.user_id,
+    type: row.type,
+    eventTimeMs: parseDbBigIntAsSafeEpochMs(row.event_time_ms, 'store_events.event_time_ms'),
+    productId: row.product_id,
+    receivedAt: row.received_at,
+  };
+}
+
+export function serializeCanonicalEntitlementForResponse(
+  row: CanonicalEntitlementForDomain,
+): CanonicalEntitlementResponse {
+  return {
+    active: row.active,
+    source: row.source,
+    expiresAt: serializeNullableTimestamp(row.expiresAt),
+    lastChangedAt: serializeNullableTimestamp(row.lastChangedAt),
+    reason: row.reason,
+  };
+}
+
+export function serializeCanonicalEntitlementRowForResponse(
+  row: CanonicalEntitlement,
+): CanonicalEntitlementResponse {
+  return serializeCanonicalEntitlementForResponse(mapCanonicalEntitlementForDomain(row));
+}
+
+export function serializeTimestamp(value: Date): string {
+  assertValidDate(value, 'timestamp');
+  return value.toISOString();
+}
+
+export function serializeNullableTimestamp(value: Date | null): string | null {
+  return value === null ? null : serializeTimestamp(value);
+}
+
+export function parseDbBigIntAsSafeEpochMs(
+  value: string | number | bigint,
+  columnName: string,
+): number {
+  const parsed = parseDbBigIntAsSafeNumber(value, columnName);
+
+  if (parsed < MIN_JS_DATE_MS || parsed > MAX_JS_DATE_MS) {
+    throw new Error(`${columnName} must be within the JavaScript Date epoch millisecond range`);
+  }
+
+  return parsed;
+}
+
+function parseDbBigIntAsSafeNumber(value: string | number | bigint, columnName: string): number {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`${columnName} must be a safe integer`);
+    }
+
+    return value;
+  }
+
+  const parsed = typeof value === 'bigint' ? value : parseDbBigIntString(value, columnName);
+
+  if (parsed < MIN_SAFE_INTEGER_BIGINT || parsed > MAX_SAFE_INTEGER_BIGINT) {
+    throw new Error(`${columnName} must fit in a safe JavaScript integer`);
+  }
+
+  return Number(parsed);
+}
+
+function parseDbBigIntString(value: string, columnName: string): bigint {
+  const trimmed = value.trim();
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(`${columnName} must be an integer string`);
+  }
+
+  return BigInt(trimmed);
+}
+
+function assertValidDate(value: Date, fieldName: string): void {
+  if (Number.isNaN(value.getTime())) {
+    throw new Error(`${fieldName} must be a valid Date`);
+  }
+}

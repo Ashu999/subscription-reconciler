@@ -6,11 +6,8 @@ import type {
   EntitlementSource,
   SourceEntitlement,
 } from '../db/types.js';
-import {
-  resolveCanonical,
-  toSourceEntitlementState,
-  type CanonicalEntitlementState,
-} from './canonical.js';
+import { mapSourceEntitlementForDomain } from '../db/types.js';
+import { resolveCanonical, type CanonicalEntitlementState } from './canonical.js';
 import { syncExpiryNotification } from './notifications.js';
 
 export interface SeedSourceEntitlementInput {
@@ -81,7 +78,7 @@ export async function recomputeCanonical(
     .where('user_id', '=', userId)
     .execute();
   const canonicalRow = resolveCanonical(
-    sourceRows.map((row) => toSourceEntitlementState(row)),
+    sourceRows.map((row) => mapSourceEntitlementForDomain(row)),
     transactionNow,
   );
 
