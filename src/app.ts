@@ -4,6 +4,7 @@ import { type Kysely, sql } from 'kysely';
 
 import type { AppConfig } from './config.js';
 import type { Database } from './db/types.js';
+import { registerUserEntitlementRoutes } from './routes/users/entitlement.js';
 import { registerMarketplaceWebhookRoutes } from './routes/webhooks/marketplace.js';
 import { registerStoreWebhookRoutes } from './routes/webhooks/store.js';
 
@@ -21,6 +22,7 @@ export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise
 
   await registerStoreWebhookRoutes(app, db);
   await registerMarketplaceWebhookRoutes(app, db);
+  await registerUserEntitlementRoutes(app, db);
 
   return app;
 }
