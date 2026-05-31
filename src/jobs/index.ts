@@ -7,6 +7,7 @@ import { HttpCarrierClient } from '../clients/carrier.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/types.js';
 import { runCarrierPoller } from './carrier-poller.js';
+import { runExpiryReconciler } from './expiry-reconciler.js';
 import { runNotificationScheduler } from './notification-scheduler.js';
 import { runNotificationWorker } from './notification-worker.js';
 
@@ -30,7 +31,7 @@ export function startCronJobs(context: JobContext): RunningJobs {
     scheduleCarrierPoller(context, carrierClient, carrierWorkerId),
     scheduleNotificationWorker(context),
     scheduleNotificationScheduler(context),
-    schedulePlaceholder('*/5 * * * *', 'expiry-reconciler', context),
+    scheduleExpiryReconciler(context),
   ];
 
   return {
@@ -38,6 +39,23 @@ export function startCronJobs(context: JobContext): RunningJobs {
       await Promise.all(tasks.map((task) => task.stop()));
     },
   };
+}
+
+function scheduleExpiryReconciler(context: JobContext): ScheduledTask {
+  return cron.schedule(
+    '* * * * *',
+    async () => {
+      try {
+        await runExpiryReconciler({
+          db: context.db,
+          logger: context.logger,
+        });
+      } catch (error) {
+        context.logger.error({ err: error, job: 'expiry-reconciler' }, 'job failed');
+      }
+    },
+    { name: 'expiry-reconciler', noOverlap: true },
+  );
 }
 
 function scheduleNotificationScheduler(context: JobContext): ScheduledTask {
@@ -94,18 +112,5 @@ function scheduleCarrierPoller(
       }
     },
     { name: 'carrier-poller', noOverlap: true },
-  );
-}
-
-function schedulePlaceholder(expression: string, name: string, context: JobContext): ScheduledTask {
-  return cron.schedule(
-    expression,
-    () => {
-      context.logger.debug(
-        { job: name, carrierBaseUrl: context.config.carrierBaseUrl },
-        'job tick',
-      );
-    },
-    { name, noOverlap: true },
   );
 }
