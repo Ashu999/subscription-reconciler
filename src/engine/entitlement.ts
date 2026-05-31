@@ -1,4 +1,4 @@
-import { sql, type Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 
 import type {
   Database,
@@ -47,6 +47,32 @@ export type ApplyStoreEventResult =
   | {
       status: 'duplicate';
     };
+
+export interface MarketplaceRevokeResult {
+  status: 'ok';
+  requestedCount: number;
+  uniqueUserCount: number;
+  revokedCount: number;
+}
+
+export interface MarketplaceRevokePartialFailureResponse {
+  status: 'partial_failure';
+  revokedCount: number;
+  failedChunkStart: number;
+  retryable: true;
+}
+
+export class MarketplaceRevokePartialFailureError extends Error {
+  readonly response: MarketplaceRevokePartialFailureResponse;
+
+  constructor(response: MarketplaceRevokePartialFailureResponse, options: { cause: unknown }) {
+    super('Marketplace revoke failed after one or more chunks committed', options);
+    this.name = 'MarketplaceRevokePartialFailureError';
+    this.response = response;
+  }
+}
+
+const MARKETPLACE_REVOKE_CHUNK_SIZE = 100;
 
 export async function acquireUserEntitlementLock(
   trx: Transaction<Database>,
@@ -114,6 +140,53 @@ export async function applyStoreEvent(
     status: 'applied',
     canonicalRow,
     storeSourceRow,
+  };
+}
+
+export async function revokeMarketplaceEntitlements(
+  db: Kysely<Database>,
+  userIds: readonly string[],
+): Promise<MarketplaceRevokeResult> {
+  const uniqueUserIds = [...new Set(userIds)].sort(compareLexicographically);
+  let revokedCount = 0;
+
+  for (
+    let chunkStart = 0;
+    chunkStart < uniqueUserIds.length;
+    chunkStart += MARKETPLACE_REVOKE_CHUNK_SIZE
+  ) {
+    const chunkUserIds = uniqueUserIds.slice(
+      chunkStart,
+      chunkStart + MARKETPLACE_REVOKE_CHUNK_SIZE,
+    );
+
+    try {
+      const chunkRevokedCount = await db.transaction().execute((trx) =>
+        revokeMarketplaceChunk(trx, chunkUserIds),
+      );
+      revokedCount += chunkRevokedCount;
+    } catch (error) {
+      if (chunkStart > 0) {
+        throw new MarketplaceRevokePartialFailureError(
+          {
+            status: 'partial_failure',
+            revokedCount,
+            failedChunkStart: chunkStart,
+            retryable: true,
+          },
+          { cause: error },
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  return {
+    status: 'ok',
+    requestedCount: userIds.length,
+    uniqueUserCount: uniqueUserIds.length,
+    revokedCount,
   };
 }
 
@@ -211,6 +284,42 @@ export async function recomputeCanonical(
   return rowWithUserId;
 }
 
+async function revokeMarketplaceChunk(
+  trx: Transaction<Database>,
+  chunkUserIds: readonly string[],
+): Promise<number> {
+  if (chunkUserIds.length === 0) {
+    return 0;
+  }
+
+  const transactionNow = await getTransactionNow(trx);
+  for (const userId of chunkUserIds) {
+    await acquireUserEntitlementLock(trx, userId);
+  }
+
+  const revokedRows = await trx
+    .updateTable('source_entitlements')
+    .set({
+      active: false,
+      expires_at: null,
+      last_changed_at: transactionNow,
+      reason: 'MARKETPLACE_REVOKE',
+    })
+    .where('user_id', 'in', chunkUserIds)
+    .where('source', '=', 'MARKETPLACE')
+    .where('active', '=', true)
+    .returning('user_id')
+    .execute();
+
+  const revokedUserIds = revokedRows.map((row) => row.user_id).sort(compareLexicographically);
+  for (const userId of revokedUserIds) {
+    const canonicalRow = await recomputeCanonical(trx, userId, transactionNow);
+    await syncExpiryNotification(trx, canonicalRow, transactionNow);
+  }
+
+  return revokedUserIds.length;
+}
+
 async function insertRawStoreEvent(
   trx: Transaction<Database>,
   event: StoreEventInput,
@@ -282,4 +391,16 @@ async function ensureCarrierPollLock(
     })
     .onConflict((oc) => oc.column('user_id').doNothing())
     .execute();
+}
+
+function compareLexicographically(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
 }

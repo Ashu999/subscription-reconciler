@@ -4,6 +4,7 @@ import { sql, type Kysely } from 'kysely';
 
 import type { AppConfig } from './config.js';
 import type { Database } from './db/types.js';
+import { registerMarketplaceWebhookRoutes } from './routes/webhooks/marketplace.js';
 import { registerStoreWebhookRoutes } from './routes/webhooks/store.js';
 
 export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise<FastifyInstance> {
@@ -19,6 +20,7 @@ export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise
   });
 
   await registerStoreWebhookRoutes(app, db);
+  await registerMarketplaceWebhookRoutes(app, db);
 
   return app;
 }
