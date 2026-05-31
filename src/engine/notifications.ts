@@ -1,4 +1,4 @@
-import type { Transaction } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 
 import type { Database } from '../db/types.js';
 import type { CanonicalEntitlementState } from './canonical.js';
@@ -8,9 +8,11 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 export async function syncExpiryNotification(
   trx: Transaction<Database>,
   canonicalRow: CanonicalEntitlementState,
-  transactionNow: Date,
+  transactionNow?: Date,
 ): Promise<void> {
-  if (!canonicalRow.active || canonicalRow.expiresAt === null || canonicalRow.expiresAt <= transactionNow) {
+  const now = transactionNow ?? (await getTransactionNow(trx));
+
+  if (!canonicalRow.active || canonicalRow.expiresAt === null || canonicalRow.expiresAt <= now) {
     await deletePendingExpiryNotifications(trx, canonicalRow.userId);
     return;
   }
@@ -23,7 +25,7 @@ export async function syncExpiryNotification(
     .where('expires_at', '!=', canonicalRow.expiresAt)
     .execute();
 
-  const shouldSchedule = canonicalRow.expiresAt.getTime() <= transactionNow.getTime() + ONE_DAY_MS;
+  const shouldSchedule = canonicalRow.expiresAt.getTime() <= now.getTime() + ONE_DAY_MS;
   if (!shouldSchedule) {
     return;
   }
@@ -51,4 +53,14 @@ async function deletePendingExpiryNotifications(
     .where('type', '=', 'PREMIUM_EXPIRES_SOON')
     .where('sent_at', 'is', null)
     .execute();
+}
+
+async function getTransactionNow(trx: Transaction<Database>): Promise<Date> {
+  const result = await sql<{ now: Date }>`select now() as now`.execute(trx);
+  const now = result.rows[0]?.now;
+  if (now === undefined) {
+    throw new Error('Postgres did not return transaction timestamp');
+  }
+
+  return now;
 }

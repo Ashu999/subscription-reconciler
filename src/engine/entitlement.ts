@@ -4,11 +4,19 @@ import type {
   Database,
   EntitlementReason,
   EntitlementSource,
+  NewStoreEvent,
+  ProductId,
   SourceEntitlement,
+  StoreEvent,
+  StoreEventType,
 } from '../db/types.js';
-import { mapSourceEntitlementForDomain } from '../db/types.js';
+import {
+  mapSourceEntitlementForDomain,
+  mapStoreEventForDomain,
+} from '../db/types.js';
 import { resolveCanonical, type CanonicalEntitlementState } from './canonical.js';
 import { syncExpiryNotification } from './notifications.js';
+import { reduceStoreEvents } from './reducer.js';
 
 export interface SeedSourceEntitlementInput {
   userId: string;
@@ -20,6 +28,25 @@ export interface SeedSourceEntitlementInput {
     'CARRIER_ACTIVE' | 'CARRIER_INACTIVE' | 'MARKETPLACE_GRANT' | 'MARKETPLACE_REVOKE'
   >;
 }
+
+export interface StoreEventInput {
+  eventId: string;
+  userId: string;
+  type: StoreEventType;
+  eventTimeMs: number;
+  productId: ProductId;
+  receivedAt?: Date;
+}
+
+export type ApplyStoreEventResult =
+  | {
+      status: 'applied';
+      canonicalRow: CanonicalEntitlementState;
+      storeSourceRow: SourceEntitlement;
+    }
+  | {
+      status: 'duplicate';
+    };
 
 export async function acquireUserEntitlementLock(
   trx: Transaction<Database>,
@@ -67,11 +94,87 @@ export async function upsertSeedSourceEntitlement(
   return canonicalRow;
 }
 
+export async function applyStoreEvent(
+  trx: Transaction<Database>,
+  event: StoreEventInput,
+): Promise<ApplyStoreEventResult> {
+  const insertedEvent = await insertRawStoreEvent(trx, event);
+  if (insertedEvent === undefined) {
+    return { status: 'duplicate' };
+  }
+
+  const transactionNow = await getTransactionNow(trx);
+  await acquireUserEntitlementLock(trx, event.userId);
+
+  const storeSourceRow = await recomputeStoreSource(trx, event.userId);
+  const canonicalRow = await recomputeCanonical(trx, event.userId, transactionNow);
+  await syncExpiryNotification(trx, canonicalRow, transactionNow);
+
+  return {
+    status: 'applied',
+    canonicalRow,
+    storeSourceRow,
+  };
+}
+
+export async function recomputeStoreSource(
+  trx: Transaction<Database>,
+  userId: string,
+): Promise<SourceEntitlement> {
+  await acquireUserEntitlementLock(trx, userId);
+
+  const eventRows = await trx
+    .selectFrom('store_events')
+    .selectAll()
+    .where('user_id', '=', userId)
+    .orderBy('event_time_ms', 'asc')
+    .orderBy('event_id', 'asc')
+    .execute();
+  const projection = reduceStoreEvents(eventRows.map((row) => mapStoreEventForDomain(row)));
+  const lastChangedAt = projection.lastChangedAt;
+  const lastEventMs = projection.lastEventMs;
+  const lastEventId = projection.lastEventId;
+
+  if (
+    lastChangedAt === null ||
+    lastEventMs === null ||
+    lastEventId === null
+  ) {
+    throw new Error(`Cannot recompute STORE source without store events for user ${userId}`);
+  }
+
+  return trx
+    .insertInto('source_entitlements')
+    .values({
+      user_id: userId,
+      source: 'STORE',
+      active: projection.active,
+      expires_at: projection.expiresAt,
+      last_changed_at: lastChangedAt,
+      reason: projection.reason,
+      last_event_ms: lastEventMs,
+      last_event_id: lastEventId,
+    })
+    .onConflict((oc) =>
+      oc.columns(['user_id', 'source']).doUpdateSet({
+        active: projection.active,
+        expires_at: projection.expiresAt,
+        last_changed_at: lastChangedAt,
+        reason: projection.reason,
+        last_event_ms: lastEventMs,
+        last_event_id: lastEventId,
+      }),
+    )
+    .returningAll()
+    .executeTakeFirstOrThrow();
+}
+
 export async function recomputeCanonical(
   trx: Transaction<Database>,
   userId: string,
-  transactionNow: Date,
+  transactionNow?: Date,
 ): Promise<CanonicalEntitlementState> {
+  const now = transactionNow ?? (await getTransactionNow(trx));
   const sourceRows = await trx
     .selectFrom('source_entitlements')
     .selectAll()
@@ -79,7 +182,7 @@ export async function recomputeCanonical(
     .execute();
   const canonicalRow = resolveCanonical(
     sourceRows.map((row) => mapSourceEntitlementForDomain(row)),
-    transactionNow,
+    now,
   );
 
   const rowWithUserId = canonicalRow.userId === '' ? { ...canonicalRow, userId } : canonicalRow;
@@ -106,6 +209,30 @@ export async function recomputeCanonical(
     .execute();
 
   return rowWithUserId;
+}
+
+async function insertRawStoreEvent(
+  trx: Transaction<Database>,
+  event: StoreEventInput,
+): Promise<StoreEvent | undefined> {
+  const newStoreEventBase = {
+    event_id: event.eventId,
+    user_id: event.userId,
+    type: event.type,
+    event_time_ms: event.eventTimeMs,
+    product_id: event.productId,
+  };
+  const newStoreEvent: NewStoreEvent =
+    event.receivedAt === undefined
+      ? newStoreEventBase
+      : { ...newStoreEventBase, received_at: event.receivedAt };
+
+  return trx
+    .insertInto('store_events')
+    .values(newStoreEvent)
+    .onConflict((oc) => oc.column('event_id').doNothing())
+    .returningAll()
+    .executeTakeFirst();
 }
 
 async function upsertSourceEntitlement(

@@ -61,9 +61,7 @@ export function resolveCanonical(
     };
   }
 
-  const latestRow = sourceRows.reduce((latest, row) =>
-    row.lastChangedAt > latest.lastChangedAt ? row : latest,
-  );
+  const latestRow = [...sourceRows].sort(compareSourceRowsByLatestChange)[0];
 
   return {
     userId,
@@ -81,4 +79,16 @@ function isDate(value: Date | null): value is Date {
 
 function maxDate(values: readonly Date[]): Date {
   return new Date(Math.max(...values.map((value) => value.getTime())));
+}
+
+function compareSourceRowsByLatestChange(
+  left: SourceEntitlementState,
+  right: SourceEntitlementState,
+): number {
+  const changedAtComparison = right.lastChangedAt.getTime() - left.lastChangedAt.getTime();
+  if (changedAtComparison !== 0) {
+    return changedAtComparison;
+  }
+
+  return SOURCE_PRECEDENCE[left.source] - SOURCE_PRECEDENCE[right.source];
 }
