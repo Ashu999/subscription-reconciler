@@ -5,6 +5,9 @@
   "license": "ISC",
   "author": "Ashutosh Sharma",
   "type": "module",
+  "engines": {
+    "node": "24.16.0"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",

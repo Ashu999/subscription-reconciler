@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: subscription_reconciler
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d subscription_reconciler"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mock-carrier:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    environment:
+      NODE_ENV: development
+      MOCK_CARRIER_HOST: 0.0.0.0
+      MOCK_CARRIER_PORT: 3001
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3001/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://app:app@db:5432/subscription_reconciler
+      APP_HOST: 0.0.0.0
+      APP_PORT: 3000
+      CARRIER_BASE_URL: http://mock-carrier:3001
+      CARRIER_HTTP_TIMEOUT_MS: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-carrier:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
