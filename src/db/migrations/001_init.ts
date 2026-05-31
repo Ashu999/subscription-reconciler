@@ -1,4 +1,4 @@
-import { sql, type Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 
 import type { Database } from '../types.js';
 
@@ -39,7 +39,10 @@ export async function up(db: Kysely<Database>): Promise<void> {
       'source_entitlements_source_check',
       sql`source in ('STORE', 'CARRIER', 'MARKETPLACE')`,
     )
-    .addCheckConstraint('source_entitlements_reason_check', enumCheck('reason', ENTITLEMENT_REASONS))
+    .addCheckConstraint(
+      'source_entitlements_reason_check',
+      enumCheck('reason', ENTITLEMENT_REASONS),
+    )
     .addCheckConstraint(
       'source_entitlements_store_event_fields_check',
       sql`(
@@ -63,7 +66,10 @@ export async function up(db: Kysely<Database>): Promise<void> {
       'canonical_entitlements_source_check',
       sql`source in ('STORE', 'CARRIER', 'MARKETPLACE', 'NONE')`,
     )
-    .addCheckConstraint('canonical_entitlements_reason_check', enumCheck('reason', ENTITLEMENT_REASONS))
+    .addCheckConstraint(
+      'canonical_entitlements_reason_check',
+      enumCheck('reason', ENTITLEMENT_REASONS),
+    )
     .execute();
 
   await db.schema

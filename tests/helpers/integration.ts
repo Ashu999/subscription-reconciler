@@ -1,6 +1,6 @@
-import type { FastifyInstance } from 'fastify';
-import { sql, type Kysely } from 'kysely';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import type { FastifyInstance } from 'fastify';
+import { type Kysely, sql } from 'kysely';
 
 import { buildApp } from '../../src/app.js';
 import type { AppConfig } from '../../src/config.js';

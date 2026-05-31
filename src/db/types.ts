@@ -157,9 +157,7 @@ const MAX_JS_DATE_MS = 8_640_000_000_000_000;
 const MIN_SAFE_INTEGER_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-export function mapSourceEntitlementForDomain(
-  row: SourceEntitlement,
-): SourceEntitlementForDomain {
+export function mapSourceEntitlementForDomain(row: SourceEntitlement): SourceEntitlementForDomain {
   return {
     userId: row.user_id,
     source: row.source,

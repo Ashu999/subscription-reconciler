@@ -1,7 +1,5 @@
 import type {
   CanonicalEntitlementForDomain,
-  CanonicalEntitlementSource,
-  EntitlementReason,
   EntitlementSource,
   SourceEntitlementForDomain,
 } from '../db/types.js';

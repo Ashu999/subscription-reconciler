@@ -1,4 +1,4 @@
-import { sql, type Kysely, type Transaction } from 'kysely';
+import { type Kysely, sql, type Transaction } from 'kysely';
 
 import type {
   Database,
@@ -10,11 +10,8 @@ import type {
   StoreEvent,
   StoreEventType,
 } from '../db/types.js';
-import {
-  mapSourceEntitlementForDomain,
-  mapStoreEventForDomain,
-} from '../db/types.js';
-import { resolveCanonical, type CanonicalEntitlementState } from './canonical.js';
+import { mapSourceEntitlementForDomain, mapStoreEventForDomain } from '../db/types.js';
+import { type CanonicalEntitlementState, resolveCanonical } from './canonical.js';
 import { syncExpiryNotification } from './notifications.js';
 import { reduceStoreEvents } from './reducer.js';
 
@@ -161,9 +158,9 @@ export async function revokeMarketplaceEntitlements(
     );
 
     try {
-      const chunkRevokedCount = await db.transaction().execute((trx) =>
-        revokeMarketplaceChunk(trx, chunkUserIds),
-      );
+      const chunkRevokedCount = await db
+        .transaction()
+        .execute((trx) => revokeMarketplaceChunk(trx, chunkUserIds));
       revokedCount += chunkRevokedCount;
     } catch (error) {
       if (chunkStart > 0) {
@@ -208,11 +205,7 @@ export async function recomputeStoreSource(
   const lastEventMs = projection.lastEventMs;
   const lastEventId = projection.lastEventId;
 
-  if (
-    lastChangedAt === null ||
-    lastEventMs === null ||
-    lastEventId === null
-  ) {
+  if (lastChangedAt === null || lastEventMs === null || lastEventId === null) {
     throw new Error(`Cannot recompute STORE source without store events for user ${userId}`);
   }
 

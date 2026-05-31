@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { FastifyBaseLogger } from 'fastify';
-import { sql, type Kysely, type Transaction } from 'kysely';
+import { type Kysely, sql, type Transaction } from 'kysely';
 
 import type { CarrierClient, CarrierPlanStatus } from '../clients/carrier.js';
 import type { Database } from '../db/types.js';
@@ -66,10 +66,7 @@ export async function runCarrierPoller(
   for (const settledResult of settledResults) {
     if (settledResult.status === 'rejected') {
       result.failedCount += 1;
-      options.logger?.error(
-        { err: settledResult.reason, workerId },
-        'carrier poll user failed',
-      );
+      options.logger?.error({ err: settledResult.reason, workerId }, 'carrier poll user failed');
       continue;
     }
 
@@ -86,10 +83,7 @@ export async function runCarrierPoller(
   return result;
 }
 
-async function claimCarrierPollLocks(
-  db: Kysely<Database>,
-  workerId: string,
-): Promise<string[]> {
+async function claimCarrierPollLocks(db: Kysely<Database>, workerId: string): Promise<string[]> {
   return db.transaction().execute(async (trx) => {
     await ensureMissingCarrierPollLocks(trx);
 

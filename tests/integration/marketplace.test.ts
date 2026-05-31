@@ -1,14 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type {
-  EntitlementSource,
-  SourceEntitlement,
-} from '../../src/db/types.js';
+import type { EntitlementSource, SourceEntitlement } from '../../src/db/types.js';
 import {
   applyStoreEvent,
   getTransactionNow,
-  upsertSeedSourceEntitlement,
   type SeedSourceEntitlementInput,
+  upsertSeedSourceEntitlement,
 } from '../../src/engine/entitlement.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
 import { createIntegrationHarness } from '../helpers/integration.js';
@@ -72,7 +69,9 @@ describe('POST /webhooks/marketplace/revoke', () => {
     expect(revokedB.reason).toBe('MARKETPLACE_REVOKE');
 
     expect(await selectSource(currentHarness, 'user_store_only', 'STORE')).toEqual(storeBefore);
-    expect(await selectSource(currentHarness, 'user_carrier_only', 'CARRIER')).toEqual(carrierBefore);
+    expect(await selectSource(currentHarness, 'user_carrier_only', 'CARRIER')).toEqual(
+      carrierBefore,
+    );
 
     const marketplaceCanonical = await selectCanonical(currentHarness, 'user_marketplace_a');
     expect(marketplaceCanonical.active).toBe(false);

@@ -1,6 +1,6 @@
 import sensible from '@fastify/sensible';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { sql, type Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 
 import type { AppConfig } from './config.js';
 import type { Database } from './db/types.js';

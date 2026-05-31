@@ -3,8 +3,8 @@ import { createDb } from '../src/db/factory.js';
 import { runMigrations } from '../src/db/migrations/runner.js';
 import {
   getTransactionNow,
-  upsertSeedSourceEntitlement,
   type SeedSourceEntitlementInput,
+  upsertSeedSourceEntitlement,
 } from '../src/engine/entitlement.js';
 
 const fixtures: SeedSourceEntitlementInput[] = [

@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-
-import cron, { type ScheduledTask } from 'node-cron';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Kysely } from 'kysely';
+import cron, { type ScheduledTask } from 'node-cron';
 
 import { HttpCarrierClient } from '../clients/carrier.js';
 import type { AppConfig } from '../config.js';
@@ -62,15 +61,14 @@ function scheduleCarrierPoller(
   );
 }
 
-function schedulePlaceholder(
-  expression: string,
-  name: string,
-  context: JobContext,
-): ScheduledTask {
+function schedulePlaceholder(expression: string, name: string, context: JobContext): ScheduledTask {
   return cron.schedule(
     expression,
     () => {
-      context.logger.debug({ job: name, carrierBaseUrl: context.config.carrierBaseUrl }, 'job tick');
+      context.logger.debug(
+        { job: name, carrierBaseUrl: context.config.carrierBaseUrl },
+        'job tick',
+      );
     },
     { name, noOverlap: true },
   );

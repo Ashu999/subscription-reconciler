@@ -352,10 +352,7 @@ function futureMs(daysFromNow: number): number {
   return Date.now() + daysFromNow * ONE_DAY_MS;
 }
 
-async function selectStoreEventCount(
-  harness: IntegrationHarness,
-  userId: string,
-): Promise<number> {
+async function selectStoreEventCount(harness: IntegrationHarness, userId: string): Promise<number> {
   const rows = await harness.db
     .selectFrom('store_events')
     .selectAll()

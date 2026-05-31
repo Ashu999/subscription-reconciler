@@ -58,27 +58,22 @@ export function applyStoreEventType(
       return applyBillingIssue(eventTimeMs, previousStoreProjection, withEvent);
     case 'CANCELLATION': {
       const paidThroughExpiry = previousPaidThroughExpiry(previousStoreProjection, eventTimeMs);
-      return paidThroughExpiry === null ? withEvent(false, null) : withEvent(true, paidThroughExpiry);
+      return paidThroughExpiry === null
+        ? withEvent(false, null)
+        : withEvent(true, paidThroughExpiry);
     }
     case 'EXPIRATION':
       return withEvent(false, null);
   }
 }
 
-export function reduceStoreEvents(
-  events: readonly StoreEventForDomain[],
-): ReducedStoreProjection {
+export function reduceStoreEvents(events: readonly StoreEventForDomain[]): ReducedStoreProjection {
   const sortedEvents = [...events].sort(compareStoreEvents);
   let projection: StoreProjection = EMPTY_STORE_PROJECTION;
   let lastEvent: StoreEventForDomain | undefined;
 
   for (const event of sortedEvents) {
-    projection = applyStoreEventType(
-      event.type,
-      event.eventTimeMs,
-      event.productId,
-      projection,
-    );
+    projection = applyStoreEventType(event.type, event.eventTimeMs, event.productId, projection);
     lastEvent = event;
   }
 
@@ -115,10 +110,7 @@ function applyBillingIssue(
   return withEvent(true, previousExpiry);
 }
 
-function previousPaidThroughExpiry(
-  projection: StoreProjection,
-  eventTimeMs: number,
-): Date | null {
+function previousPaidThroughExpiry(projection: StoreProjection, eventTimeMs: number): Date | null {
   if (projection.expiresAt === null || projection.expiresAt.getTime() <= eventTimeMs) {
     return null;
   }

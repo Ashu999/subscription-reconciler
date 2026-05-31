@@ -1,18 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type {
-  EntitlementSource,
-  SourceEntitlement,
-} from '../../src/db/types.js';
+import type { EntitlementSource, SourceEntitlement } from '../../src/db/types.js';
 import {
   applyStoreEvent,
   getTransactionNow,
-  upsertSeedSourceEntitlement,
   type SeedSourceEntitlementInput,
+  upsertSeedSourceEntitlement,
 } from '../../src/engine/entitlement.js';
 import { runCarrierPoller } from '../../src/jobs/carrier-poller.js';
-import { FakeCarrierClient } from '../helpers/fake-carrier-client.js';
 import type { FakeCarrierOutcome } from '../helpers/fake-carrier-client.js';
+import { FakeCarrierClient } from '../helpers/fake-carrier-client.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
 import { createIntegrationHarness } from '../helpers/integration.js';
 
@@ -323,20 +320,11 @@ async function selectCarrierPollLock(harness: IntegrationHarness, userId: string
     .executeTakeFirstOrThrow();
 }
 
-async function deleteCarrierPollLock(
-  harness: IntegrationHarness,
-  userId: string,
-): Promise<void> {
-  await harness.db
-    .deleteFrom('carrier_poll_locks')
-    .where('user_id', '=', userId)
-    .execute();
+async function deleteCarrierPollLock(harness: IntegrationHarness, userId: string): Promise<void> {
+  await harness.db.deleteFrom('carrier_poll_locks').where('user_id', '=', userId).execute();
 }
 
-async function expectNoCarrierPollLock(
-  harness: IntegrationHarness,
-  userId: string,
-): Promise<void> {
+async function expectNoCarrierPollLock(harness: IntegrationHarness, userId: string): Promise<void> {
   const row = await harness.db
     .selectFrom('carrier_poll_locks')
     .selectAll()
