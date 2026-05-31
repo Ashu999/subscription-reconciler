@@ -4,9 +4,31 @@
   "description": "",
   "license": "ISC",
   "author": "Ashutosh Sharma",
-  "type": "commonjs",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "tsx src/db/migrations/runner.ts",
+    "seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@fastify/sensible": "6.0.4",
+    "dotenv": "17.4.2",
+    "fastify": "5.8.5",
+    "kysely": "0.29.2",
+    "node-cron": "4.2.1",
+    "pg": "8.21.0"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "12.0.1",
+    "@types/node": "24.12.4",
+    "@types/node-cron": "3.0.11",
+    "@types/pg": "8.20.0",
+    "tsx": "4.22.3",
+    "typescript": "5.9.2",
+    "vitest": "4.1.7"
   }
 }
