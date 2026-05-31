@@ -7,6 +7,8 @@ import { HttpCarrierClient } from '../clients/carrier.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/types.js';
 import { runCarrierPoller } from './carrier-poller.js';
+import { runNotificationScheduler } from './notification-scheduler.js';
+import { runNotificationWorker } from './notification-worker.js';
 
 export interface JobContext {
   db: Kysely<Database>;
@@ -26,8 +28,8 @@ export function startCronJobs(context: JobContext): RunningJobs {
   const carrierWorkerId = randomUUID();
   const tasks = [
     scheduleCarrierPoller(context, carrierClient, carrierWorkerId),
-    schedulePlaceholder('* * * * *', 'notification-worker', context),
-    schedulePlaceholder('*/5 * * * *', 'notification-scheduler', context),
+    scheduleNotificationWorker(context),
+    scheduleNotificationScheduler(context),
     schedulePlaceholder('*/5 * * * *', 'expiry-reconciler', context),
   ];
 
@@ -36,6 +38,40 @@ export function startCronJobs(context: JobContext): RunningJobs {
       await Promise.all(tasks.map((task) => task.stop()));
     },
   };
+}
+
+function scheduleNotificationScheduler(context: JobContext): ScheduledTask {
+  return cron.schedule(
+    '* * * * *',
+    async () => {
+      try {
+        await runNotificationScheduler({
+          db: context.db,
+          logger: context.logger,
+        });
+      } catch (error) {
+        context.logger.error({ err: error, job: 'notification-scheduler' }, 'job failed');
+      }
+    },
+    { name: 'notification-scheduler', noOverlap: true },
+  );
+}
+
+function scheduleNotificationWorker(context: JobContext): ScheduledTask {
+  return cron.schedule(
+    '* * * * *',
+    async () => {
+      try {
+        await runNotificationWorker({
+          db: context.db,
+          logger: context.logger,
+        });
+      } catch (error) {
+        context.logger.error({ err: error, job: 'notification-worker' }, 'job failed');
+      }
+    },
+    { name: 'notification-worker', noOverlap: true },
+  );
 }
 
 function scheduleCarrierPoller(
