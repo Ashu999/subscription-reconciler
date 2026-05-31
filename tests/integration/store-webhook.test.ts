@@ -1,0 +1,382 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import type { CanonicalEntitlementResponse } from '../../src/db/types.js';
+import type { IntegrationHarness } from '../helpers/integration.js';
+import { createIntegrationHarness } from '../helpers/integration.js';
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const MONTH_MS = 30 * ONE_DAY_MS;
+const GRACE_MS = 7 * ONE_DAY_MS;
+
+interface AppliedResponse {
+  status: 'applied';
+  entitlement: CanonicalEntitlementResponse;
+}
+
+interface DuplicateResponse {
+  status: 'duplicate';
+}
+
+interface StoreWebhookPayload {
+  eventId: string;
+  userId: string;
+  type:
+    | 'INITIAL_PURCHASE'
+    | 'RENEWAL'
+    | 'CANCELLATION'
+    | 'BILLING_ISSUE'
+    | 'EXPIRATION'
+    | 'UN_CANCELLATION';
+  eventTimeMs: number;
+  productId: string;
+}
+
+describe('POST /webhooks/store', () => {
+  let harness: IntegrationHarness | undefined;
+
+  beforeAll(async () => {
+    harness = await createIntegrationHarness();
+  }, 120_000);
+
+  afterEach(async () => {
+    await requireHarness(harness).resetDb();
+  });
+
+  afterAll(async () => {
+    await harness?.stop();
+  });
+
+  it('stores a unique event once and returns duplicate for repeated event IDs', async () => {
+    const currentHarness = requireHarness(harness);
+    const payload = storeEvent({
+      eventId: 'duplicate-initial',
+      userId: 'user_duplicate',
+      type: 'INITIAL_PURCHASE',
+      eventTimeMs: futureMs(1),
+    });
+
+    const firstResponse = await postStoreWebhook(currentHarness, payload);
+    expect(firstResponse.statusCode).toBe(200);
+    expect(firstResponse.json<AppliedResponse>().status).toBe('applied');
+    const canonicalAfterFirst = await selectCanonical(currentHarness, payload.userId);
+
+    const duplicateResponse = await postStoreWebhook(currentHarness, payload);
+    expect(duplicateResponse.statusCode).toBe(200);
+    expect(duplicateResponse.json<DuplicateResponse>()).toEqual({ status: 'duplicate' });
+
+    expect(await selectStoreEventCount(currentHarness, payload.userId)).toBe(1);
+    expect(await selectCanonical(currentHarness, payload.userId)).toEqual(canonicalAfterFirst);
+  });
+
+  it('replays late out-of-order events before applying cancellation semantics', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_late_out_of_order';
+    const renewalMs = futureMs(2);
+    const cancellationMs = renewalMs + ONE_DAY_MS;
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'late-cancellation',
+        userId,
+        type: 'CANCELLATION',
+        eventTimeMs: cancellationMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'late-renewal',
+        userId,
+        type: 'RENEWAL',
+        eventTimeMs: renewalMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('CANCELLATION');
+    expect(source.expires_at).toEqual(new Date(renewalMs + MONTH_MS));
+    expect(source.last_changed_at).toEqual(new Date(cancellationMs));
+    expect(source.last_event_ms).toBe(String(cancellationMs));
+    expect(source.last_event_id).toBe('late-cancellation');
+
+    const canonical = await selectCanonical(currentHarness, userId);
+    expect(canonical.active).toBe(true);
+    expect(canonical.source).toBe('STORE');
+    expect(canonical.reason).toBe('CANCELLATION');
+  });
+
+  it('reactivates access when a renewal is later than an expiration in event time', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_renewal_after_expiration';
+    const expirationMs = futureMs(3);
+    const renewalMs = expirationMs + ONE_DAY_MS;
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'expiration-first',
+        userId,
+        type: 'EXPIRATION',
+        eventTimeMs: expirationMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'renewal-second',
+        userId,
+        type: 'RENEWAL',
+        eventTimeMs: renewalMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('RENEWAL');
+    expect(source.expires_at).toEqual(new Date(renewalMs + MONTH_MS));
+  });
+
+  it('uses event IDs as deterministic tie-breakers for same-time events', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_same_time';
+    const eventTimeMs = futureMs(4);
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'b-renewal',
+        userId,
+        type: 'RENEWAL',
+        eventTimeMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'a-expiration',
+        userId,
+        type: 'EXPIRATION',
+        eventTimeMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('RENEWAL');
+    expect(source.last_event_id).toBe('b-renewal');
+  });
+
+  it('serializes concurrent source mutations through the per-user lock', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_concurrent';
+    const renewalMs = futureMs(5);
+    const cancellationMs = renewalMs + ONE_DAY_MS;
+
+    const [renewalResponse, cancellationResponse] = await Promise.all([
+      postStoreWebhook(
+        currentHarness,
+        storeEvent({
+          eventId: 'concurrent-renewal',
+          userId,
+          type: 'RENEWAL',
+          eventTimeMs: renewalMs,
+        }),
+      ),
+      postStoreWebhook(
+        currentHarness,
+        storeEvent({
+          eventId: 'concurrent-cancellation',
+          userId,
+          type: 'CANCELLATION',
+          eventTimeMs: cancellationMs,
+        }),
+      ),
+    ]);
+
+    expect(renewalResponse.statusCode).toBe(200);
+    expect(renewalResponse.json<AppliedResponse>().status).toBe('applied');
+    expect(cancellationResponse.statusCode).toBe(200);
+    expect(cancellationResponse.json<AppliedResponse>().status).toBe('applied');
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('CANCELLATION');
+    expect(source.expires_at).toEqual(new Date(renewalMs + MONTH_MS));
+    expect(await selectStoreEventCount(currentHarness, userId)).toBe(2);
+  });
+
+  it('schedules exactly one due notification for billing grace inside the next 24 hours', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_billing_notification';
+    const billingIssueMs = Date.now() - Math.floor(6.5 * ONE_DAY_MS);
+    const initialPurchaseMs = billingIssueMs - 29 * ONE_DAY_MS;
+    const expiresAt = new Date(billingIssueMs + GRACE_MS);
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'billing-initial-purchase',
+        userId,
+        type: 'INITIAL_PURCHASE',
+        eventTimeMs: initialPurchaseMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'billing-issue',
+        userId,
+        type: 'BILLING_ISSUE',
+        eventTimeMs: billingIssueMs,
+      }),
+    );
+
+    const duplicateResponse = await postStoreWebhook(
+      currentHarness,
+      storeEvent({
+        eventId: 'billing-issue',
+        userId,
+        type: 'BILLING_ISSUE',
+        eventTimeMs: billingIssueMs,
+      }),
+    );
+    expect(duplicateResponse.json<DuplicateResponse>()).toEqual({ status: 'duplicate' });
+
+    const notifications = await currentHarness.db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('user_id', '=', userId)
+      .execute();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.type).toBe('PREMIUM_EXPIRES_SOON');
+    expect(notifications[0]?.expires_at).toEqual(expiresAt);
+    expect(notifications[0]?.scheduled_for).toEqual(new Date(expiresAt.getTime() - ONE_DAY_MS));
+    expect(notifications[0]?.sent_at).toBeNull();
+  });
+
+  it('treats billing issue as an inactive no-op when it is the first store event', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_initial_billing_issue';
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'initial-billing-issue',
+        userId,
+        type: 'BILLING_ISSUE',
+        eventTimeMs: futureMs(6),
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(false);
+    expect(source.reason).toBe('BILLING_ISSUE');
+    expect(source.expires_at).toBeNull();
+
+    const canonical = await selectCanonical(currentHarness, userId);
+    expect(canonical.active).toBe(false);
+    expect(canonical.source).toBe('NONE');
+    expect(canonical.reason).toBe('BILLING_ISSUE');
+
+    const notifications = await currentHarness.db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('user_id', '=', userId)
+      .execute();
+    expect(notifications).toHaveLength(0);
+  });
+
+  it('rejects unknown products before storing raw events', async () => {
+    const currentHarness = requireHarness(harness);
+    const payload = storeEvent({
+      eventId: 'unknown-product',
+      userId: 'user_unknown_product',
+      type: 'INITIAL_PURCHASE',
+      eventTimeMs: futureMs(7),
+      productId: 'premium_yearly',
+    });
+
+    const response = await postStoreWebhook(currentHarness, payload);
+    expect(response.statusCode).toBe(400);
+
+    const rows = await currentHarness.db
+      .selectFrom('store_events')
+      .selectAll()
+      .where('event_id', '=', payload.eventId)
+      .execute();
+    expect(rows).toHaveLength(0);
+  });
+});
+
+function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
+  if (harness === undefined) {
+    throw new Error('integration harness was not initialized');
+  }
+
+  return harness;
+}
+
+async function expectApplied(
+  harness: IntegrationHarness,
+  payload: StoreWebhookPayload,
+): Promise<AppliedResponse> {
+  const response = await postStoreWebhook(harness, payload);
+  expect(response.statusCode).toBe(200);
+  const body = response.json<AppliedResponse>();
+  expect(body.status).toBe('applied');
+  return body;
+}
+
+function postStoreWebhook(harness: IntegrationHarness, payload: StoreWebhookPayload) {
+  return harness.app.inject({
+    method: 'POST',
+    url: '/webhooks/store',
+    payload,
+  });
+}
+
+function storeEvent(overrides: Partial<StoreWebhookPayload>): StoreWebhookPayload {
+  return {
+    eventId: 'event-id',
+    userId: 'user-id',
+    type: 'RENEWAL',
+    eventTimeMs: futureMs(10),
+    productId: 'premium_monthly',
+    ...overrides,
+  };
+}
+
+function futureMs(daysFromNow: number): number {
+  return Date.now() + daysFromNow * ONE_DAY_MS;
+}
+
+async function selectStoreEventCount(
+  harness: IntegrationHarness,
+  userId: string,
+): Promise<number> {
+  const rows = await harness.db
+    .selectFrom('store_events')
+    .selectAll()
+    .where('user_id', '=', userId)
+    .execute();
+  return rows.length;
+}
+
+async function selectStoreSource(harness: IntegrationHarness, userId: string) {
+  return harness.db
+    .selectFrom('source_entitlements')
+    .selectAll()
+    .where('user_id', '=', userId)
+    .where('source', '=', 'STORE')
+    .executeTakeFirstOrThrow();
+}
+
+async function selectCanonical(harness: IntegrationHarness, userId: string) {
+  return harness.db
+    .selectFrom('canonical_entitlements')
+    .selectAll()
+    .where('user_id', '=', userId)
+    .executeTakeFirstOrThrow();
+}

@@ -4,6 +4,7 @@ import { sql, type Kysely } from 'kysely';
 
 import type { AppConfig } from './config.js';
 import type { Database } from './db/types.js';
+import { registerStoreWebhookRoutes } from './routes/webhooks/store.js';
 
 export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
@@ -16,6 +17,8 @@ export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise
     await sql`select 1`.execute(db);
     return { status: 'ok' };
   });
+
+  await registerStoreWebhookRoutes(app, db);
 
   return app;
 }
