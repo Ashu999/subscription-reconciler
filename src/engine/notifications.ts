@@ -1,10 +1,20 @@
-import { sql, type Transaction } from 'kysely';
+import type { Transaction } from 'kysely';
 
-import type { Database } from '../db/types.js';
+import {
+  deletePendingExpiryNotifications,
+  deletePendingExpiryNotificationsExcept,
+  insertExpiryNotificationOnce,
+} from '../db/repositories/notifications.js';
+import type { Database } from '../db/schema.js';
+import { getTransactionNow } from '../db/transactions.js';
+import { EXPIRING_SOON_WINDOW_MS } from '../domain/constants.js';
 import type { CanonicalEntitlementState } from './canonical.js';
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
+/**
+ * What: Keep the pending expiry reminder in sync with the canonical entitlement.
+ * Why: Every entitlement recompute can change access, so scheduling must be idempotent
+ * and stale unsent reminders must disappear before workers can send them.
+ */
 export async function syncExpiryNotification(
   trx: Transaction<Database>,
   canonicalRow: CanonicalEntitlementState,
@@ -17,50 +27,21 @@ export async function syncExpiryNotification(
     return;
   }
 
-  await trx
-    .deleteFrom('notifications')
-    .where('user_id', '=', canonicalRow.userId)
-    .where('type', '=', 'PREMIUM_EXPIRES_SOON')
-    .where('sent_at', 'is', null)
-    .where('expires_at', '!=', canonicalRow.expiresAt)
-    .execute();
+  // expires_at is part of the idempotency key, so remove unsent reminders for
+  // older expiry instants after a renewal or source switch extends access.
+  await deletePendingExpiryNotificationsExcept(trx, canonicalRow.userId, canonicalRow.expiresAt);
 
-  const shouldSchedule = canonicalRow.expiresAt.getTime() <= now.getTime() + ONE_DAY_MS;
+  const shouldSchedule =
+    canonicalRow.expiresAt.getTime() <= now.getTime() + EXPIRING_SOON_WINDOW_MS;
   if (!shouldSchedule) {
     return;
   }
 
-  await trx
-    .insertInto('notifications')
-    .values({
-      user_id: canonicalRow.userId,
-      type: 'PREMIUM_EXPIRES_SOON',
-      expires_at: canonicalRow.expiresAt,
-      scheduled_for: new Date(canonicalRow.expiresAt.getTime() - ONE_DAY_MS),
-      sent_at: null,
-    })
-    .onConflict((oc) => oc.columns(['user_id', 'type', 'expires_at']).doNothing())
-    .execute();
-}
-
-async function deletePendingExpiryNotifications(
-  trx: Transaction<Database>,
-  userId: string,
-): Promise<void> {
-  await trx
-    .deleteFrom('notifications')
-    .where('user_id', '=', userId)
-    .where('type', '=', 'PREMIUM_EXPIRES_SOON')
-    .where('sent_at', 'is', null)
-    .execute();
-}
-
-async function getTransactionNow(trx: Transaction<Database>): Promise<Date> {
-  const result = await sql<{ now: Date }>`select now() as now`.execute(trx);
-  const now = result.rows[0]?.now;
-  if (now === undefined) {
-    throw new Error('Postgres did not return transaction timestamp');
-  }
-
-  return now;
+  // The unique key makes repeated recomputes safe while preserving a separate
+  // reminder if a later renewal produces a new expiry instant.
+  await insertExpiryNotificationOnce(trx, {
+    userId: canonicalRow.userId,
+    expiresAt: canonicalRow.expiresAt,
+    scheduledFor: new Date(canonicalRow.expiresAt.getTime() - EXPIRING_SOON_WINDOW_MS),
+  });
 }

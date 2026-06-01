@@ -1,21 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import type { Kysely } from 'kysely';
-
-import type { Database, ProductId, StoreEventType } from '../../db/types.js';
-import { serializeCanonicalEntitlementForResponse } from '../../db/types.js';
-import { applyStoreEvent } from '../../engine/entitlement.js';
-
-const STORE_EVENT_TYPES = [
-  'INITIAL_PURCHASE',
-  'RENEWAL',
-  'CANCELLATION',
-  'BILLING_ISSUE',
-  'EXPIRATION',
-  'UN_CANCELLATION',
-] as const satisfies readonly StoreEventType[];
-const PRODUCT_IDS = ['premium_monthly'] as const satisfies readonly ProductId[];
-const MIN_JS_DATE_MS = -8_640_000_000_000_000;
-const MAX_JS_DATE_MS = 8_640_000_000_000_000;
+import type { Database } from '../../db/schema.js';
+import {
+  MAX_JS_DATE_MS,
+  MIN_JS_DATE_MS,
+  PRODUCT_IDS,
+  STORE_EVENT_TYPES,
+} from '../../domain/constants.js';
+import type { ProductId, StoreEventType } from '../../domain/types.js';
+import { applyStoreEvent } from '../../engine/store-entitlement.js';
+import { serializeCanonicalEntitlementForResponse } from '../../http/serializers.js';
 
 interface StoreWebhookBody {
   eventId: string;
@@ -42,6 +36,11 @@ const storeWebhookBodySchema = {
   },
 } as const;
 
+/**
+ * What: Register store webhook ingestion.
+ * Why: Store delivery is at-least-once and unordered, so accepted events are persisted
+ * and replayed in a transaction before returning canonical state.
+ */
 export async function registerStoreWebhookRoutes(
   app: FastifyInstance,
   db: Kysely<Database>,
@@ -54,6 +53,8 @@ export async function registerStoreWebhookRoutes(
       },
     },
     async (request) => {
+      // The transaction keeps raw event idempotency, source recompute, canonical
+      // recompute, and notification sync as one committed change.
       const result = await db.transaction().execute((trx) => applyStoreEvent(trx, request.body));
 
       if (result.status === 'duplicate') {

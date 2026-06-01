@@ -23,6 +23,11 @@ export interface MockCarrierConfig {
 
 type Env = NodeJS.ProcessEnv;
 
+/**
+ * What: Read and validate configuration for the main API service.
+ * Why: Failing fast on malformed environment values prevents partially started
+ * processes from running with unusable network or database settings.
+ */
 export function readConfig(env: Env = process.env): AppConfig {
   return {
     nodeEnv: parseNodeEnv(readRequired(env, 'NODE_ENV')),
@@ -37,6 +42,11 @@ export function readConfig(env: Env = process.env): AppConfig {
   };
 }
 
+/**
+ * What: Read and validate configuration for the mock carrier service.
+ * Why: The mock runs as a separate process, so it needs its own host and port while
+ * sharing the same environment validation rules.
+ */
 export function readMockCarrierConfig(env: Env = process.env): MockCarrierConfig {
   return {
     nodeEnv: parseNodeEnv(readRequired(env, 'NODE_ENV')),
@@ -45,6 +55,10 @@ export function readMockCarrierConfig(env: Env = process.env): MockCarrierConfig
   };
 }
 
+/**
+ * What: Fetch a required environment variable as a non-empty string.
+ * Why: Later parsers should only deal with shape validation, not missing values.
+ */
 function readRequired(env: Env, name: string): string {
   const value = env[name];
   if (value === undefined || value.trim() === '') {
@@ -54,6 +68,10 @@ function readRequired(env: Env, name: string): string {
   return value;
 }
 
+/**
+ * What: Restrict NODE_ENV to the supported runtime modes.
+ * Why: Logger behavior and test setup depend on predictable environment names.
+ */
 function parseNodeEnv(value: string): NodeEnv {
   if (NODE_ENVS.includes(value as NodeEnv)) {
     return value as NodeEnv;
@@ -62,6 +80,10 @@ function parseNodeEnv(value: string): NodeEnv {
   throw new Error(`NODE_ENV must be one of: ${NODE_ENVS.join(', ')}`);
 }
 
+/**
+ * What: Parse a TCP port from an environment variable.
+ * Why: Ports must be positive integers inside the valid network port range.
+ */
 function parsePort(value: string, name: string): number {
   const parsed = parsePositiveInteger(value, name);
   if (parsed > 65535) {
@@ -71,6 +93,11 @@ function parsePort(value: string, name: string): number {
   return parsed;
 }
 
+/**
+ * What: Parse a string as a positive safe integer.
+ * Why: Timeouts and ports should reject floats, negatives, and values JavaScript cannot
+ * represent exactly.
+ */
 function parsePositiveInteger(value: string, name: string): number {
   if (!/^\d+$/.test(value)) {
     throw new Error(`${name} must be a positive integer`);
@@ -84,6 +111,11 @@ function parsePositiveInteger(value: string, name: string): number {
   return parsed;
 }
 
+/**
+ * What: Parse and normalize an HTTP(S) base URL.
+ * Why: Carrier client URL construction should not depend on whether env values include
+ * a trailing slash.
+ */
 function parseHttpUrl(value: string, name: string): string {
   const url = parseUrl(value, name);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -93,6 +125,10 @@ function parseHttpUrl(value: string, name: string): string {
   return trimTrailingSlash(url.toString());
 }
 
+/**
+ * What: Parse a Postgres connection string.
+ * Why: The DB factory expects a database URL, not an arbitrary URI or plain hostname.
+ */
 function parsePostgresUrl(value: string, name: string): string {
   const url = parseUrl(value, name);
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
@@ -102,6 +138,11 @@ function parsePostgresUrl(value: string, name: string): string {
   return url.toString();
 }
 
+/**
+ * What: Convert a string into a URL object with a named error.
+ * Why: Higher-level parsers can attach environment variable names to validation
+ * failures instead of leaking generic URL exceptions.
+ */
 function parseUrl(value: string, name: string): URL {
   try {
     return new URL(value);
@@ -110,6 +151,11 @@ function parseUrl(value: string, name: string): URL {
   }
 }
 
+/**
+ * What: Remove one trailing slash from a URL string.
+ * Why: Callers compose path segments themselves, so normalized bases avoid accidental
+ * double slashes.
+ */
 function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
 }

@@ -1,17 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import { type Kysely, sql } from 'kysely';
+import type { Kysely } from 'kysely';
 
-import type { CanonicalEntitlement, Database } from '../../db/types.js';
+import { selectCanonicalEntitlementForRead } from '../../db/repositories/canonical-entitlements.js';
+import type { Database } from '../../db/schema.js';
+import { acquireUserEntitlementLock } from '../../db/transactions.js';
+import { recomputeCanonicalAndSyncNotifications } from '../../engine/recompute.js';
 import {
   serializeCanonicalEntitlementForResponse,
   serializeCanonicalEntitlementRowForResponse,
-} from '../../db/types.js';
-import {
-  acquireUserEntitlementLock,
-  getTransactionNow,
-  recomputeCanonical,
-} from '../../engine/entitlement.js';
-import { syncExpiryNotification } from '../../engine/notifications.js';
+} from '../../http/serializers.js';
 
 interface EntitlementParams {
   id: string;
@@ -34,6 +31,11 @@ const unknownEntitlementResponse = {
   reason: 'NO_ENTITLEMENT',
 } as const;
 
+/**
+ * What: Register the entitlement read endpoint for a user.
+ * Why: Clients need one canonical answer, and expired stored rows should be refreshed
+ * before the response is returned.
+ */
 export async function registerUserEntitlementRoutes(
   app: FastifyInstance,
   db: Kysely<Database>,
@@ -55,6 +57,8 @@ export async function registerUserEntitlementRoutes(
         return serializeCanonicalEntitlementRowForResponse(canonicalRow);
       }
 
+      // Refresh on read closes the small gap between an expiry timestamp passing
+      // and the background reconciler's next run.
       return serializeCanonicalEntitlementForResponse(
         await refreshCanonicalEntitlementForRead(db, request.params.id),
       );
@@ -62,36 +66,15 @@ export async function registerUserEntitlementRoutes(
   );
 }
 
-interface CanonicalEntitlementReadRow extends CanonicalEntitlement {
-  needs_refresh: boolean;
-}
-
-async function selectCanonicalEntitlementForRead(
-  db: Kysely<Database>,
-  userId: string,
-): Promise<CanonicalEntitlementReadRow | undefined> {
-  return db
-    .selectFrom('canonical_entitlements')
-    .selectAll()
-    .select(
-      sql<boolean>`
-        active = true
-        and expires_at is not null
-        and expires_at <= now()
-      `.as('needs_refresh'),
-    )
-    .where('user_id', '=', userId)
-    .executeTakeFirst();
-}
-
+/**
+ * What: Recompute a user's canonical entitlement during a read request.
+ * Why: A per-user lock keeps this refresh consistent with webhooks and background jobs
+ * that may update the same entitlement state.
+ */
 async function refreshCanonicalEntitlementForRead(db: Kysely<Database>, userId: string) {
   return db.transaction().execute(async (trx) => {
     await acquireUserEntitlementLock(trx, userId);
 
-    const transactionNow = await getTransactionNow(trx);
-    const canonicalRow = await recomputeCanonical(trx, userId, transactionNow);
-    await syncExpiryNotification(trx, canonicalRow, transactionNow);
-
-    return canonicalRow;
+    return recomputeCanonicalAndSyncNotifications(trx, userId);
   });
 }

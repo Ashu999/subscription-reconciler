@@ -1,15 +1,10 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { type Kysely, sql } from 'kysely';
+import type { Kysely } from 'kysely';
 
-import type { Database } from '../db/types.js';
-import {
-  getTransactionNow,
-  recomputeCanonical,
-  tryAcquireUserEntitlementLock,
-} from '../engine/entitlement.js';
-import { syncExpiryNotification } from '../engine/notifications.js';
-
-const NOTIFICATION_SCHEDULER_BATCH_SIZE = 100;
+import { selectCanonicalUserIdsExpiringWithin } from '../db/repositories/canonical-entitlements.js';
+import type { Database } from '../db/schema.js';
+import { EXPIRING_SOON_WINDOW_MS, NOTIFICATION_SCHEDULER_BATCH_SIZE } from '../domain/constants.js';
+import { recomputeCanonicalForCandidate } from './entitlement-sync.js';
 
 type NotificationSchedulerLogger = Pick<FastifyBaseLogger, 'debug'>;
 
@@ -24,10 +19,19 @@ export interface NotificationSchedulerRunResult {
   skippedBusyCount: number;
 }
 
+/**
+ * What: Ensure soon-expiring canonical entitlements have pending reminders.
+ * Why: Notification rows are derived from canonical state and may need resyncing after
+ * late events, renewals, or missed scheduler runs.
+ */
 export async function runNotificationScheduler(
   options: RunNotificationSchedulerOptions,
 ): Promise<NotificationSchedulerRunResult> {
-  const candidateUserIds = await selectNotificationCandidateUserIds(options.db);
+  const candidateUserIds = await selectCanonicalUserIdsExpiringWithin(
+    options.db,
+    NOTIFICATION_SCHEDULER_BATCH_SIZE,
+    EXPIRING_SOON_WINDOW_MS,
+  );
   const result: NotificationSchedulerRunResult = {
     candidateCount: candidateUserIds.length,
     syncedCount: 0,
@@ -47,35 +51,14 @@ export async function runNotificationScheduler(
   return result;
 }
 
-async function selectNotificationCandidateUserIds(db: Kysely<Database>): Promise<string[]> {
-  const rows = await sql<{ user_id: string }>`
-    select user_id
-    from canonical_entitlements
-    where active = true
-      and expires_at is not null
-      and expires_at > now()
-      and expires_at <= now() + interval '24 hours'
-    order by expires_at asc, user_id asc
-    limit ${NOTIFICATION_SCHEDULER_BATCH_SIZE}
-  `.execute(db);
-
-  return rows.rows.map((row) => row.user_id);
-}
-
+/**
+ * What: Recompute and sync reminders for one notification candidate.
+ * Why: Re-reading canonical state under a user lock prevents stale rows from scheduling
+ * reminders after another mutation changed entitlement access.
+ */
 async function syncNotificationCandidate(
   db: Kysely<Database>,
   userId: string,
 ): Promise<'synced' | 'skipped_busy'> {
-  return db.transaction().execute(async (trx) => {
-    const locked = await tryAcquireUserEntitlementLock(trx, userId);
-    if (!locked) {
-      return 'skipped_busy';
-    }
-
-    const transactionNow = await getTransactionNow(trx);
-    const canonicalRow = await recomputeCanonical(trx, userId, transactionNow);
-    await syncExpiryNotification(trx, canonicalRow, transactionNow);
-
-    return 'synced';
-  });
+  return recomputeCanonicalForCandidate(db, userId, 'synced');
 }

@@ -13,6 +13,11 @@ const querySchema = {
   },
 } as const;
 
+/**
+ * What: Start the mock carrier API used by the poller.
+ * Why: Local and Docker runs need a deterministic endpoint shape without depending on
+ * a real carrier integration.
+ */
 async function main(): Promise<void> {
   const config = readMockCarrierConfig();
   const app = Fastify({
@@ -29,6 +34,11 @@ async function main(): Promise<void> {
   await app.listen({ host: config.mockCarrierHost, port: config.mockCarrierPort });
 }
 
+/**
+ * What: Randomly choose a mock carrier plan status.
+ * Why: Poller behavior should exercise active, inactive, and retryable API-error paths
+ * during local runs.
+ */
 function chooseCarrierStatus(): CarrierStatus {
   const roll = Math.random();
   if (roll < 0.85) {
@@ -42,6 +52,7 @@ function chooseCarrierStatus(): CarrierStatus {
   return 'api_error';
 }
 
+// Surface startup failures to container logs while letting Node exit with failure.
 main().catch((error: unknown) => {
   console.error(error);
   process.exitCode = 1;

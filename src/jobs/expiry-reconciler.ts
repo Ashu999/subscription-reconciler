@@ -1,15 +1,10 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { type Kysely, sql } from 'kysely';
+import type { Kysely } from 'kysely';
 
-import type { Database } from '../db/types.js';
-import {
-  getTransactionNow,
-  recomputeCanonical,
-  tryAcquireUserEntitlementLock,
-} from '../engine/entitlement.js';
-import { syncExpiryNotification } from '../engine/notifications.js';
-
-const EXPIRY_RECONCILER_BATCH_SIZE = 100;
+import { selectExpiredCanonicalUserIds } from '../db/repositories/canonical-entitlements.js';
+import type { Database } from '../db/schema.js';
+import { EXPIRY_RECONCILER_BATCH_SIZE } from '../domain/constants.js';
+import { recomputeCanonicalForCandidate } from './entitlement-sync.js';
 
 type ExpiryReconcilerLogger = Pick<FastifyBaseLogger, 'debug'>;
 
@@ -24,10 +19,18 @@ export interface ExpiryReconcilerRunResult {
   skippedBusyCount: number;
 }
 
+/**
+ * What: Recompute canonical rows that look active but have passed their expiry.
+ * Why: Expiration is time-driven, so a background pass closes rows even when no webhook
+ * arrives exactly at the expiry timestamp.
+ */
 export async function runExpiryReconciler(
   options: RunExpiryReconcilerOptions,
 ): Promise<ExpiryReconcilerRunResult> {
-  const candidateUserIds = await selectExpiredCanonicalUserIds(options.db);
+  const candidateUserIds = await selectExpiredCanonicalUserIds(
+    options.db,
+    EXPIRY_RECONCILER_BATCH_SIZE,
+  );
   const result: ExpiryReconcilerRunResult = {
     candidateCount: candidateUserIds.length,
     reconciledCount: 0,
@@ -47,34 +50,14 @@ export async function runExpiryReconciler(
   return result;
 }
 
-async function selectExpiredCanonicalUserIds(db: Kysely<Database>): Promise<string[]> {
-  const rows = await sql<{ user_id: string }>`
-    select user_id
-    from canonical_entitlements
-    where active = true
-      and expires_at is not null
-      and expires_at <= now()
-    order by expires_at asc, user_id asc
-    limit ${EXPIRY_RECONCILER_BATCH_SIZE}
-  `.execute(db);
-
-  return rows.rows.map((row) => row.user_id);
-}
-
+/**
+ * What: Recompute one expired canonical row if the user is not busy.
+ * Why: The job should avoid waiting behind request-time mutations and let the next run
+ * retry skipped users.
+ */
 async function reconcileExpiredCanonical(
   db: Kysely<Database>,
   userId: string,
 ): Promise<'reconciled' | 'skipped_busy'> {
-  return db.transaction().execute(async (trx) => {
-    const locked = await tryAcquireUserEntitlementLock(trx, userId);
-    if (!locked) {
-      return 'skipped_busy';
-    }
-
-    const transactionNow = await getTransactionNow(trx);
-    const canonicalRow = await recomputeCanonical(trx, userId, transactionNow);
-    await syncExpiryNotification(trx, canonicalRow, transactionNow);
-
-    return 'reconciled';
-  });
+  return recomputeCanonicalForCandidate(db, userId, 'reconciled');
 }

@@ -116,7 +116,7 @@ describe('applyStoreEventType', () => {
     });
   });
 
-  it('preserves future expiry on un-cancellation and starts fresh without one', () => {
+  it('preserves future expiry on un-cancellation and does not grant without one', () => {
     const previous = activeProjection('CANCELLATION', BASE_MS, BASE_MS + MONTH_MS);
 
     const preserved = applyStoreEventType(
@@ -134,8 +134,33 @@ describe('applyStoreEventType', () => {
       'premium_monthly',
       previous,
     );
-    expect(fresh.active).toBe(true);
-    expect(fresh.expiresAt).toEqual(new Date(BASE_MS + MONTH_MS + ONE_DAY_MS + MONTH_MS));
+    expect(fresh).toEqual({
+      active: false,
+      reason: 'UN_CANCELLATION',
+      expiresAt: null,
+      lastChangedAt: new Date(BASE_MS + MONTH_MS + ONE_DAY_MS),
+    });
+  });
+
+  it('lets a renewal after a billing issue establish the renewed paid-through expiry', () => {
+    const initial = activeProjection('INITIAL_PURCHASE', BASE_MS, BASE_MS + MONTH_MS);
+    const billingIssueMs = BASE_MS + 29 * ONE_DAY_MS;
+    const renewalMs = billingIssueMs + ONE_DAY_MS;
+    const billingIssue = applyStoreEventType(
+      'BILLING_ISSUE',
+      billingIssueMs,
+      'premium_monthly',
+      initial,
+    );
+
+    const renewal = applyStoreEventType('RENEWAL', renewalMs, 'premium_monthly', billingIssue);
+
+    expect(renewal).toEqual({
+      active: true,
+      reason: 'RENEWAL',
+      expiresAt: new Date(renewalMs + MONTH_MS),
+      lastChangedAt: new Date(renewalMs),
+    });
   });
 
   it('removes access on expiration', () => {

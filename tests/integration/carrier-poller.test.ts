@@ -1,17 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-
-import type { EntitlementSource, SourceEntitlement } from '../../src/db/types.js';
+import { getTransactionNow } from '../../src/db/transactions.js';
 import {
   applyStoreEvent,
-  getTransactionNow,
   type SeedSourceEntitlementInput,
   upsertSeedSourceEntitlement,
 } from '../../src/engine/entitlement.js';
 import { runCarrierPoller } from '../../src/jobs/carrier-poller.js';
+import { selectCanonical, selectCarrierPollLock, selectSource } from '../helpers/db-selectors.js';
 import type { FakeCarrierOutcome } from '../helpers/fake-carrier-client.js';
 import { FakeCarrierClient } from '../helpers/fake-carrier-client.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
-import { createIntegrationHarness } from '../helpers/integration.js';
+import { createIntegrationHarness, requireHarness } from '../helpers/integration.js';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -242,14 +241,6 @@ describe('carrier poller', () => {
   });
 });
 
-function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
-  if (harness === undefined) {
-    throw new Error('integration harness was not initialized');
-  }
-
-  return harness;
-}
-
 async function seedSource(
   harness: IntegrationHarness,
   input: SeedSourceEntitlementInput,
@@ -289,35 +280,6 @@ function carrierGrant(userId: string): SeedSourceEntitlementInput {
     expiresAt: null,
     reason: 'CARRIER_ACTIVE',
   };
-}
-
-async function selectSource(
-  harness: IntegrationHarness,
-  userId: string,
-  source: EntitlementSource,
-): Promise<SourceEntitlement> {
-  return harness.db
-    .selectFrom('source_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .where('source', '=', source)
-    .executeTakeFirstOrThrow();
-}
-
-async function selectCanonical(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('canonical_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .executeTakeFirstOrThrow();
-}
-
-async function selectCarrierPollLock(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('carrier_poll_locks')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .executeTakeFirstOrThrow();
 }
 
 async function deleteCarrierPollLock(harness: IntegrationHarness, userId: string): Promise<void> {

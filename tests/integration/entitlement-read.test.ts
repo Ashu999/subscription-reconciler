@@ -1,21 +1,17 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-
-import type {
-  CanonicalEntitlementResponse,
-  EntitlementSource,
-  SourceEntitlement,
-} from '../../src/db/types.js';
+import { getTransactionNow } from '../../src/db/transactions.js';
 import {
   applyStoreEvent,
-  getTransactionNow,
   type SeedSourceEntitlementInput,
   type StoreEventInput,
   upsertSeedSourceEntitlement,
 } from '../../src/engine/entitlement.js';
+import type { CanonicalEntitlementResponse } from '../../src/http/serializers.js';
 import { runCarrierPoller } from '../../src/jobs/carrier-poller.js';
+import { selectCanonical, selectNotifications, selectSource } from '../helpers/db-selectors.js';
 import { FakeCarrierClient } from '../helpers/fake-carrier-client.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
-import { createIntegrationHarness } from '../helpers/integration.js';
+import { createIntegrationHarness, requireHarness } from '../helpers/integration.js';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const MONTH_MS = 30 * ONE_DAY_MS;
@@ -214,14 +210,6 @@ interface ExpiredStoreCandidate {
   expiresAt: Date;
 }
 
-function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
-  if (harness === undefined) {
-    throw new Error('integration harness was not initialized');
-  }
-
-  return harness;
-}
-
 function getEntitlement(harness: IntegrationHarness, userId: string) {
   return harness.app.inject({
     method: 'GET',
@@ -322,35 +310,5 @@ async function insertPendingExpiryNotification(
       scheduled_for: new Date(expiresAt.getTime() - ONE_DAY_MS),
       sent_at: null,
     })
-    .execute();
-}
-
-async function selectSource(
-  harness: IntegrationHarness,
-  userId: string,
-  source: EntitlementSource,
-): Promise<SourceEntitlement> {
-  return harness.db
-    .selectFrom('source_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .where('source', '=', source)
-    .executeTakeFirstOrThrow();
-}
-
-async function selectCanonical(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('canonical_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .executeTakeFirstOrThrow();
-}
-
-async function selectNotifications(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('notifications')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .orderBy('expires_at', 'asc')
     .execute();
 }

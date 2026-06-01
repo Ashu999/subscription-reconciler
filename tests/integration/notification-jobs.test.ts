@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { Notification } from '../../src/db/types.js';
 import { applyStoreEvent, type StoreEventInput } from '../../src/engine/entitlement.js';
 import { runNotificationScheduler } from '../../src/jobs/notification-scheduler.js';
 import { runNotificationWorker } from '../../src/jobs/notification-worker.js';
+import { selectCanonical, selectNotifications } from '../helpers/db-selectors.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
-import { createIntegrationHarness } from '../helpers/integration.js';
+import { createIntegrationHarness, requireHarness } from '../helpers/integration.js';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -213,14 +213,6 @@ describe('expiration notification jobs', () => {
   });
 });
 
-function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
-  if (harness === undefined) {
-    throw new Error('integration harness was not initialized');
-  }
-
-  return harness;
-}
-
 function storeEvent(input: {
   eventId: string;
   userId: string;
@@ -295,26 +287,6 @@ async function insertStoreCanonicalAndNotification(
     .execute();
 }
 
-async function selectNotifications(
-  harness: IntegrationHarness,
-  userId: string,
-): Promise<Notification[]> {
-  return harness.db
-    .selectFrom('notifications')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .orderBy('expires_at', 'asc')
-    .execute();
-}
-
 async function deleteNotifications(harness: IntegrationHarness, userId: string): Promise<void> {
   await harness.db.deleteFrom('notifications').where('user_id', '=', userId).execute();
-}
-
-async function selectCanonical(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('canonical_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .executeTakeFirstOrThrow();
 }

@@ -1,8 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { CanonicalEntitlementResponse } from '../../src/db/types.js';
+import type { CanonicalEntitlementResponse } from '../../src/http/serializers.js';
+import {
+  selectCanonical,
+  selectStoreEventCount,
+  selectStoreSource,
+} from '../helpers/db-selectors.js';
 import type { IntegrationHarness } from '../helpers/integration.js';
-import { createIntegrationHarness } from '../helpers/integration.js';
+import { createIntegrationHarness, requireHarness } from '../helpers/integration.js';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const MONTH_MS = 30 * ONE_DAY_MS;
@@ -379,14 +384,6 @@ describe('POST /webhooks/store', () => {
   });
 });
 
-function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
-  if (harness === undefined) {
-    throw new Error('integration harness was not initialized');
-  }
-
-  return harness;
-}
-
 async function expectApplied(
   harness: IntegrationHarness,
   payload: StoreWebhookPayload,
@@ -419,30 +416,4 @@ function storeEvent(overrides: Partial<StoreWebhookPayload>): StoreWebhookPayloa
 
 function futureMs(daysFromNow: number): number {
   return Date.now() + daysFromNow * ONE_DAY_MS;
-}
-
-async function selectStoreEventCount(harness: IntegrationHarness, userId: string): Promise<number> {
-  const rows = await harness.db
-    .selectFrom('store_events')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .execute();
-  return rows.length;
-}
-
-async function selectStoreSource(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('source_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .where('source', '=', 'STORE')
-    .executeTakeFirstOrThrow();
-}
-
-async function selectCanonical(harness: IntegrationHarness, userId: string) {
-  return harness.db
-    .selectFrom('canonical_entitlements')
-    .selectAll()
-    .where('user_id', '=', userId)
-    .executeTakeFirstOrThrow();
 }

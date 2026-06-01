@@ -15,6 +15,14 @@ export interface IntegrationHarness {
   stop: () => Promise<void>;
 }
 
+export function requireHarness(harness: IntegrationHarness | undefined): IntegrationHarness {
+  if (harness === undefined) {
+    throw new Error('integration harness was not initialized');
+  }
+
+  return harness;
+}
+
 export async function createIntegrationHarness(): Promise<IntegrationHarness> {
   const container = await new PostgreSqlContainer('postgres:18.4').start();
   const db = createDb(container.getConnectionUri());

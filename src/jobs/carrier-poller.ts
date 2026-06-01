@@ -1,19 +1,20 @@
 import { randomUUID } from 'node:crypto';
 
 import type { FastifyBaseLogger } from 'fastify';
-import { type Kysely, sql, type Transaction } from 'kysely';
+import type { Kysely } from 'kysely';
 
 import type { CarrierClient, CarrierPlanStatus } from '../clients/carrier.js';
-import type { Database } from '../db/types.js';
 import {
-  acquireUserEntitlementLock,
-  getTransactionNow,
-  recomputeCanonical,
-} from '../engine/entitlement.js';
-import { syncExpiryNotification } from '../engine/notifications.js';
-
-const CARRIER_POLL_BATCH_SIZE = 50;
-const CARRIER_POLL_CONCURRENCY = 10;
+  advanceAndReleaseCarrierPollLock,
+  claimDueCarrierPollLocks,
+  deleteOwnedCarrierPollLock,
+  selectOwnedCarrierPollLockForUpdate,
+} from '../db/repositories/carrier-poll-locks.js';
+import { deactivateActiveCarrierSource } from '../db/repositories/source-entitlements.js';
+import type { Database } from '../db/schema.js';
+import { acquireUserEntitlementLock, getTransactionNow } from '../db/transactions.js';
+import { CARRIER_POLL_BATCH_SIZE, CARRIER_POLL_CONCURRENCY } from '../domain/constants.js';
+import { recomputeCanonicalAndSyncNotifications } from '../engine/recompute.js';
 
 type CarrierPollOutcome = CarrierPlanStatus;
 type CarrierPollerLogger = Pick<FastifyBaseLogger, 'debug' | 'error' | 'warn'>;
@@ -34,11 +35,20 @@ export interface CarrierPollerRunResult {
   failedCount: number;
 }
 
+/**
+ * What: Poll a bounded batch of active carrier entitlements.
+ * Why: Carrier does not push updates, so workers must periodically discover inactive
+ * plans while coordinating safely across multiple service instances.
+ */
 export async function runCarrierPoller(
   options: RunCarrierPollerOptions,
 ): Promise<CarrierPollerRunResult> {
   const workerId = options.workerId ?? randomUUID();
-  const claimedUserIds = await claimCarrierPollLocks(options.db, workerId);
+  const claimedUserIds = await claimDueCarrierPollLocks(
+    options.db,
+    workerId,
+    CARRIER_POLL_BATCH_SIZE,
+  );
   const settledResults = await settleWithConcurrency(
     claimedUserIds,
     CARRIER_POLL_CONCURRENCY,
@@ -63,6 +73,8 @@ export async function runCarrierPoller(
     failedCount: 0,
   };
 
+  // Promise.allSettled keeps one failing user from hiding the rest of the batch's
+  // outcomes or leaving summary counts incomplete.
   for (const settledResult of settledResults) {
     if (settledResult.status === 'rejected') {
       result.failedCount += 1;
@@ -83,65 +95,6 @@ export async function runCarrierPoller(
   return result;
 }
 
-async function claimCarrierPollLocks(db: Kysely<Database>, workerId: string): Promise<string[]> {
-  return db.transaction().execute(async (trx) => {
-    await ensureMissingCarrierPollLocks(trx);
-
-    const claimedRows = await sql<{ user_id: string }>`
-      select l.user_id
-      from carrier_poll_locks l
-      join source_entitlements s
-        on s.user_id = l.user_id
-       and s.source = 'CARRIER'
-      where s.active = true
-        and (s.expires_at is null or s.expires_at > now())
-        and l.next_poll_at <= now()
-        and (l.lease_until is null or l.lease_until < now())
-      for update of l skip locked
-      limit ${CARRIER_POLL_BATCH_SIZE}
-    `.execute(trx);
-
-    const userIds = claimedRows.rows.map((row) => row.user_id);
-    if (userIds.length === 0) {
-      return userIds;
-    }
-
-    await trx
-      .updateTable('carrier_poll_locks')
-      .set({
-        lease_until: sql<Date>`now() + interval '10 minutes'`,
-        locked_by: workerId,
-      })
-      .where('user_id', 'in', userIds)
-      .execute();
-
-    return userIds;
-  });
-}
-
-async function ensureMissingCarrierPollLocks(trx: Transaction<Database>): Promise<void> {
-  await sql`
-    insert into carrier_poll_locks (
-      user_id,
-      next_poll_at,
-      lease_until,
-      locked_by,
-      last_polled_at
-    )
-    select
-      user_id,
-      now(),
-      null,
-      null,
-      null
-    from source_entitlements
-    where source = 'CARRIER'
-      and active = true
-      and (expires_at is null or expires_at > now())
-    on conflict (user_id) do nothing
-  `.execute(trx);
-}
-
 interface PollClaimedUserInput {
   db: Kysely<Database>;
   carrierClient: CarrierClient;
@@ -150,6 +103,11 @@ interface PollClaimedUserInput {
   logger?: CarrierPollerLogger;
 }
 
+/**
+ * What: Poll one claimed user and update carrier source state when needed.
+ * Why: Active or uncertain responses only advance the schedule, while confirmed
+ * inactive responses must revoke CARRIER access and recompute derived rows.
+ */
 async function pollClaimedUser(input: PollClaimedUserInput): Promise<CarrierPollOutcome> {
   let shouldReleaseLease = true;
   let outcome: CarrierPollOutcome = 'api_error';
@@ -160,6 +118,8 @@ async function pollClaimedUser(input: PollClaimedUserInput): Promise<CarrierPoll
 
     if (plan.status === 'inactive') {
       const deactivated = await deactivateCarrierSource(input.db, input.userId, input.workerId);
+      // A successful deactivation deletes the lock entirely; releasing it again would
+      // re-create poll cadence for a user who no longer has CARRIER access.
       shouldReleaseLease = !deactivated;
       if (deactivated) {
         return 'inactive';
@@ -191,6 +151,11 @@ async function pollClaimedUser(input: PollClaimedUserInput): Promise<CarrierPoll
   }
 }
 
+/**
+ * What: Deactivate a user's CARRIER source when this worker still owns the claim.
+ * Why: The carrier lock and user entitlement lock together prevent stale poll results
+ * from overwriting fresher entitlement changes.
+ */
 async function deactivateCarrierSource(
   db: Kysely<Database>,
   userId: string,
@@ -199,65 +164,31 @@ async function deactivateCarrierSource(
   return db.transaction().execute(async (trx) => {
     await acquireUserEntitlementLock(trx, userId);
 
-    const ownedLock = await sql<{ user_id: string }>`
-      select user_id
-      from carrier_poll_locks
-      where user_id = ${userId}
-        and locked_by = ${workerId}
-      for update
-    `.execute(trx);
-    if (ownedLock.rows[0] === undefined) {
+    // Re-check ownership inside the mutation transaction because the poll happened
+    // outside this transaction and the lease may have been stolen or cleared.
+    const ownsLock = await selectOwnedCarrierPollLockForUpdate(trx, userId, workerId);
+    if (!ownsLock) {
       return false;
     }
 
     const transactionNow = await getTransactionNow(trx);
-    const changedRows = await trx
-      .updateTable('source_entitlements')
-      .set({
-        active: false,
-        expires_at: null,
-        last_changed_at: transactionNow,
-        reason: 'CARRIER_INACTIVE',
-      })
-      .where('user_id', '=', userId)
-      .where('source', '=', 'CARRIER')
-      .where('active', '=', true)
-      .returning('user_id')
-      .execute();
+    const changed = await deactivateActiveCarrierSource(trx, userId, transactionNow);
 
-    if (changedRows.length > 0) {
-      const canonicalRow = await recomputeCanonical(trx, userId, transactionNow);
-      await syncExpiryNotification(trx, canonicalRow, transactionNow);
+    if (changed) {
+      await recomputeCanonicalAndSyncNotifications(trx, userId, transactionNow);
     }
 
-    await trx
-      .deleteFrom('carrier_poll_locks')
-      .where('user_id', '=', userId)
-      .where('locked_by', '=', workerId)
-      .execute();
+    await deleteOwnedCarrierPollLock(trx, userId, workerId);
 
     return true;
   });
 }
 
-async function advanceAndReleaseCarrierPollLock(
-  db: Kysely<Database>,
-  userId: string,
-  workerId: string,
-): Promise<void> {
-  await db
-    .updateTable('carrier_poll_locks')
-    .set({
-      next_poll_at: sql<Date>`now() + interval '5 minutes'`,
-      lease_until: null,
-      locked_by: null,
-      last_polled_at: sql<Date>`now()`,
-    })
-    .where('user_id', '=', userId)
-    .where('locked_by', '=', workerId)
-    .execute();
-}
-
+/**
+ * What: Run async work in fixed-size batches and keep every settled result.
+ * Why: Polling should limit carrier/API pressure while still reporting rejected users
+ * separately from carrier api_error statuses.
+ */
 async function settleWithConcurrency<T, TResult>(
   items: readonly T[],
   concurrency: number,
