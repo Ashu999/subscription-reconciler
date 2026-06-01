@@ -19,7 +19,7 @@ export function resolveCanonical(
 ): CanonicalEntitlementState {
   const activeRows = sourceRows
     .filter((row) => row.active && (row.expiresAt === null || row.expiresAt > asOf))
-    .sort((left, right) => SOURCE_PRECEDENCE[left.source] - SOURCE_PRECEDENCE[right.source]);
+    .sort(compareActiveSourceRows);
 
   const winner = activeRows[0];
   if (winner !== undefined) {
@@ -89,4 +89,42 @@ function compareSourceRowsByLatestChange(
   }
 
   return SOURCE_PRECEDENCE[left.source] - SOURCE_PRECEDENCE[right.source];
+}
+
+function compareActiveSourceRows(
+  left: SourceEntitlementState,
+  right: SourceEntitlementState,
+): number {
+  const precedenceComparison = SOURCE_PRECEDENCE[left.source] - SOURCE_PRECEDENCE[right.source];
+  if (precedenceComparison !== 0) {
+    return precedenceComparison;
+  }
+
+  const changedAtComparison = right.lastChangedAt.getTime() - left.lastChangedAt.getTime();
+  if (changedAtComparison !== 0) {
+    return changedAtComparison;
+  }
+
+  const expiryComparison = compareNullableExpiry(left.expiresAt, right.expiresAt);
+  if (expiryComparison !== 0) {
+    return expiryComparison;
+  }
+
+  return left.reason.localeCompare(right.reason);
+}
+
+function compareNullableExpiry(left: Date | null, right: Date | null): number {
+  if (left === null && right === null) {
+    return 0;
+  }
+
+  if (left === null) {
+    return -1;
+  }
+
+  if (right === null) {
+    return 1;
+  }
+
+  return right.getTime() - left.getTime();
 }

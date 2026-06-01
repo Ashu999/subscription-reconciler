@@ -68,6 +68,31 @@ describe('POST /webhooks/store', () => {
     expect(await selectCanonical(currentHarness, payload.userId)).toEqual(canonicalAfterFirst);
   });
 
+  it('creates STORE source and canonical rows for a first store event', async () => {
+    const currentHarness = requireHarness(harness);
+    const eventTimeMs = futureMs(1);
+    const payload = storeEvent({
+      eventId: 'first-event-initial',
+      userId: 'user_first_event',
+      type: 'INITIAL_PURCHASE',
+      eventTimeMs,
+    });
+
+    await expectApplied(currentHarness, payload);
+
+    const source = await selectStoreSource(currentHarness, payload.userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('INITIAL_PURCHASE');
+    expect(source.expires_at).toEqual(new Date(eventTimeMs + MONTH_MS));
+    expect(source.last_event_ms).toBe(String(eventTimeMs));
+    expect(source.last_event_id).toBe(payload.eventId);
+
+    const canonical = await selectCanonical(currentHarness, payload.userId);
+    expect(canonical.active).toBe(true);
+    expect(canonical.source).toBe('STORE');
+    expect(canonical.expires_at).toEqual(new Date(eventTimeMs + MONTH_MS));
+  });
+
   it('replays late out-of-order events before applying cancellation semantics', async () => {
     const currentHarness = requireHarness(harness);
     const userId = 'user_late_out_of_order';
@@ -254,6 +279,50 @@ describe('POST /webhooks/store', () => {
     expect(notifications[0]?.expires_at).toEqual(expiresAt);
     expect(notifications[0]?.scheduled_for).toEqual(new Date(expiresAt.getTime() - ONE_DAY_MS));
     expect(notifications[0]?.sent_at).toBeNull();
+  });
+
+  it('does not shorten a later paid-through expiry when a billing issue arrives', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_billing_preserves_paid_through';
+    const initialPurchaseMs = Date.now() - 10 * ONE_DAY_MS;
+    const billingIssueMs = Date.now() - ONE_DAY_MS;
+    const paidThroughExpiresAt = new Date(initialPurchaseMs + MONTH_MS);
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'billing-preserve-initial',
+        userId,
+        type: 'INITIAL_PURCHASE',
+        eventTimeMs: initialPurchaseMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'billing-preserve-issue',
+        userId,
+        type: 'BILLING_ISSUE',
+        eventTimeMs: billingIssueMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('BILLING_ISSUE');
+    expect(source.expires_at).toEqual(paidThroughExpiresAt);
+
+    const canonical = await selectCanonical(currentHarness, userId);
+    expect(canonical.active).toBe(true);
+    expect(canonical.source).toBe('STORE');
+    expect(canonical.expires_at).toEqual(paidThroughExpiresAt);
+
+    const notifications = await currentHarness.db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('user_id', '=', userId)
+      .execute();
+    expect(notifications).toHaveLength(0);
   });
 
   it('treats billing issue as an inactive no-op when it is the first store event', async () => {

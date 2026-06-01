@@ -7,6 +7,7 @@ import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import { readConfig } from '../../config.js';
 import { createDb } from '../factory.js';
 import type { Database } from '../types.js';
+import * as initialMigration from './001_init.js';
 
 export async function runMigrations(db: Kysely<Database>): Promise<void> {
   const migrationFolder = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +17,7 @@ export async function runMigrations(db: Kysely<Database>): Promise<void> {
       fs,
       path,
       migrationFolder,
+      import: importMigration,
       onFileIgnored(fileName, reason) {
         if (!fileName.startsWith('runner.') && !fileName.endsWith('.map')) {
           console.warn(`Ignored migration file ${fileName}: ${reason}`);
@@ -37,6 +39,15 @@ export async function runMigrations(db: Kysely<Database>): Promise<void> {
   if (error !== undefined) {
     throw error;
   }
+}
+
+async function importMigration(modulePath: string) {
+  const fileName = path.basename(modulePath);
+  if (fileName === '001_init.ts' || fileName === '001_init.js') {
+    return initialMigration;
+  }
+
+  return import(pathToFileURL(modulePath).href);
 }
 
 if (isMainModule()) {

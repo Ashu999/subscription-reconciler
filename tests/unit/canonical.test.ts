@@ -139,6 +139,22 @@ describe('resolveCanonical', () => {
     expect(canonical.reason).toBe('EXPIRATION');
     expect(canonical.lastChangedAt).toEqual(sameChangeTime);
   });
+
+  it('breaks same-source active ties by latest source change', () => {
+    const latestChange = new Date(BASE_MS + 2_000);
+    const canonical = resolveCanonical(
+      [
+        sourceRow('user_1', 'CARRIER', true, FUTURE, 'CARRIER_ACTIVE'),
+        sourceRow('user_1', 'CARRIER', true, null, 'CARRIER_ACTIVE', latestChange),
+      ],
+      NOW,
+    );
+
+    expect(canonical.active).toBe(true);
+    expect(canonical.source).toBe('CARRIER');
+    expect(canonical.expiresAt).toBeNull();
+    expect(canonical.lastChangedAt).toEqual(latestChange);
+  });
 });
 
 function sourceRow(

@@ -5,7 +5,7 @@ import { type Kysely, sql } from 'kysely';
 import { buildApp } from '../../src/app.js';
 import type { AppConfig } from '../../src/config.js';
 import { createDb } from '../../src/db/factory.js';
-import { up as runInitialMigration } from '../../src/db/migrations/001_init.js';
+import { runMigrations } from '../../src/db/migrations/runner.js';
 import type { Database } from '../../src/db/types.js';
 
 export interface IntegrationHarness {
@@ -20,7 +20,7 @@ export async function createIntegrationHarness(): Promise<IntegrationHarness> {
   const db = createDb(container.getConnectionUri());
 
   try {
-    await runInitialMigration(db);
+    await runMigrations(db);
     const app = await buildApp(db, testConfig(container.getConnectionUri()));
 
     return {
