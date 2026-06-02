@@ -1,3 +1,4 @@
+import type { InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { CanonicalEntitlementResponse } from '../../src/http/serializers.js';
@@ -35,6 +36,8 @@ interface StoreWebhookPayload {
   eventTimeMs: number;
   productId: string;
 }
+
+type StoreInjectPayload = NonNullable<InjectOptions['payload']>;
 
 describe('POST /webhooks/store', () => {
   let harness: IntegrationHarness | undefined;
@@ -330,6 +333,91 @@ describe('POST /webhooks/store', () => {
     expect(notifications).toHaveLength(0);
   });
 
+  it('preserves paid-through access when an un-cancellation follows a cancellation', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_uncancellation_preserves_access';
+    const initialPurchaseMs = futureMs(1);
+    const cancellationMs = initialPurchaseMs + ONE_DAY_MS;
+    const unCancellationMs = cancellationMs + ONE_DAY_MS;
+    const paidThroughExpiresAt = new Date(initialPurchaseMs + MONTH_MS);
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'uncancel-initial',
+        userId,
+        type: 'INITIAL_PURCHASE',
+        eventTimeMs: initialPurchaseMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'uncancel-cancellation',
+        userId,
+        type: 'CANCELLATION',
+        eventTimeMs: cancellationMs,
+      }),
+    );
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'uncancel-restored',
+        userId,
+        type: 'UN_CANCELLATION',
+        eventTimeMs: unCancellationMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('UN_CANCELLATION');
+    expect(source.expires_at).toEqual(paidThroughExpiresAt);
+    expect(source.last_changed_at).toEqual(new Date(unCancellationMs));
+    expect(source.last_event_ms).toBe(String(unCancellationMs));
+    expect(source.last_event_id).toBe('uncancel-restored');
+
+    const canonical = await selectCanonical(currentHarness, userId);
+    expect(canonical.active).toBe(true);
+    expect(canonical.source).toBe('STORE');
+    expect(canonical.reason).toBe('UN_CANCELLATION');
+    expect(canonical.expires_at).toEqual(paidThroughExpiresAt);
+  });
+
+  it('treats un-cancellation as inactive when there is no paid-through access to restore', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_uncancellation_no_paid_through';
+    const unCancellationMs = futureMs(6);
+
+    await expectApplied(
+      currentHarness,
+      storeEvent({
+        eventId: 'uncancel-without-history',
+        userId,
+        type: 'UN_CANCELLATION',
+        eventTimeMs: unCancellationMs,
+      }),
+    );
+
+    const source = await selectStoreSource(currentHarness, userId);
+    expect(source.active).toBe(false);
+    expect(source.reason).toBe('UN_CANCELLATION');
+    expect(source.expires_at).toBeNull();
+    expect(source.last_changed_at).toEqual(new Date(unCancellationMs));
+
+    const canonical = await selectCanonical(currentHarness, userId);
+    expect(canonical.active).toBe(false);
+    expect(canonical.source).toBe('NONE');
+    expect(canonical.reason).toBe('UN_CANCELLATION');
+
+    const notifications = await currentHarness.db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('user_id', '=', userId)
+      .execute();
+    expect(notifications).toHaveLength(0);
+  });
+
   it('treats billing issue as an inactive no-op when it is the first store event', async () => {
     const currentHarness = requireHarness(harness);
     const userId = 'user_initial_billing_issue';
@@ -382,6 +470,54 @@ describe('POST /webhooks/store', () => {
       .execute();
     expect(rows).toHaveLength(0);
   });
+
+  it('rejects malformed store webhook requests before storing raw events', async () => {
+    const currentHarness = requireHarness(harness);
+    const validPayload = storeEvent({
+      eventId: 'validation-base',
+      userId: 'user_store_validation',
+      type: 'INITIAL_PURCHASE',
+      eventTimeMs: futureMs(8),
+    });
+    const cases: Array<{ name: string; payload: StoreInjectPayload }> = [
+      {
+        name: 'missing eventId',
+        payload: omit(validPayload, 'eventId'),
+      },
+      {
+        name: 'empty userId',
+        payload: { ...validPayload, eventId: 'validation-empty-user', userId: '' },
+      },
+      {
+        name: 'invalid event type',
+        payload: { ...validPayload, eventId: 'validation-invalid-type', type: 'PAUSE' },
+      },
+      {
+        name: 'non-integer event time',
+        payload: { ...validPayload, eventId: 'validation-decimal-time', eventTimeMs: 1.5 },
+      },
+      {
+        name: 'out-of-range event time',
+        payload: { ...validPayload, eventId: 'validation-out-of-range-time', eventTimeMs: 1e20 },
+      },
+      {
+        name: 'unknown property',
+        payload: { ...validPayload, eventId: 'validation-extra-field', ignored: true },
+      },
+    ];
+
+    for (const currentCase of cases) {
+      const response = await postStoreWebhook(currentHarness, currentCase.payload);
+      expect(response.statusCode, currentCase.name).toBe(400);
+    }
+
+    const rows = await currentHarness.db
+      .selectFrom('store_events')
+      .selectAll()
+      .where('user_id', '=', validPayload.userId)
+      .execute();
+    expect(rows).toHaveLength(0);
+  });
 });
 
 async function expectApplied(
@@ -395,7 +531,10 @@ async function expectApplied(
   return body;
 }
 
-function postStoreWebhook(harness: IntegrationHarness, payload: StoreWebhookPayload) {
+function postStoreWebhook(
+  harness: IntegrationHarness,
+  payload: StoreInjectPayload,
+): Promise<LightMyRequestResponse> {
   return harness.app.inject({
     method: 'POST',
     url: '/webhooks/store',
@@ -416,4 +555,9 @@ function storeEvent(overrides: Partial<StoreWebhookPayload>): StoreWebhookPayloa
 
 function futureMs(daysFromNow: number): number {
   return Date.now() + daysFromNow * ONE_DAY_MS;
+}
+
+function omit<T extends object, K extends keyof T>(value: T, key: K): Omit<T, K> {
+  const { [key]: _removed, ...rest } = value;
+  return rest;
 }

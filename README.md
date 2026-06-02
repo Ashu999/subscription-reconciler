@@ -266,9 +266,10 @@ npm run seed
 - **Fixed precedence.** Active, unexpired sources resolve as
   `STORE > CARRIER > MARKETPLACE`. Precedence chooses the canonical explanation;
   any active source can still keep access active.
-- **Per-user advisory locks.** Every source mutation takes a PostgreSQL
+- **Per-user advisory locks.** Entitlement mutations run under a PostgreSQL
   transaction advisory lock keyed with `hashtextextended($1::text, 0)`, so
-  concurrent work for the same user serializes without blocking unrelated users.
+  source updates, canonical recompute, and notification sync serialize per user
+  without blocking unrelated users.
 - **Advisory-first worker ordering.** Per-user workers acquire advisory locks
   before row locks or recomputation. This keeps lock ordering consistent with
   webhook writes.
@@ -283,14 +284,21 @@ npm run seed
   and conflict handling rather than application-only checks.
 - **Business-time expiry.** Store expiry is derived from the event's
   `eventTimeMs`; replaying the same event later produces the same `expiresAt`.
+- **Database transaction time.** Recompute paths read `now()` from PostgreSQL so
+  expiry checks, row timestamps, and notification scheduling share one clock
+  inside a transaction.
 - **Expiry refresh.** The expiry reconciler refreshes stale canonical rows in
   the background, and the read endpoint has a guard that recomputes expired
   canonical rows before returning.
 - **Hidden carrier truth.** The carrier poller scans all active CARRIER source
   rows, not only users whose current canonical source is CARRIER. This prevents
   stale fallback after a higher-precedence STORE entitlement ends.
-- **`lastChangedAt`.** Canonical `lastChangedAt` is the winning source row's
-  timestamp, not the moment canonical switched.
+- **`lastChangedAt`.** Active canonical rows expose the winning source row's
+  business timestamp, not the moment canonical switched. Inactive rows use the
+  latest relevant source change or expiry timestamp.
+- **Audit timestamps.** Mutable entitlement tables also have `created_at` and
+  `updated_at` lifecycle columns maintained by a PostgreSQL trigger, separate
+  from business timestamps such as `lastChangedAt`.
 - **Store assumptions.** `UN_CANCELLATION` without a paid-through expiry is an
   inactive/no-op event. `BILLING_ISSUE` uses
   `max(previousExpiresAt, eventTimeMs + 7 days)`, so it never shortens paid-through
@@ -317,9 +325,6 @@ npm run seed
   CARRIER rows costs extra work, but keeps fallback truth fresh.
 - **Fixed precedence vs most-recent-source wins.** Fixed precedence is easier to
   reason about and matches product ownership of source truth.
-- **Orphaned carrier poll locks.** Rows left behind for inactive CARRIER users
-  are harmless because claims join against active CARRIER source rows. Cleanup is
-  future hygiene work.
 
 ## What I Would Change With Another Week
 
@@ -334,14 +339,18 @@ npm run seed
    an admin replay path instead of depending only on logs and retries.
 4. **Carrier error backoff.** After repeated `api_error` responses, the poller
    would back off exponentially and surface alerts or metrics.
-5. **Carrier poll lock cleanup.** A small maintenance job would remove lock rows
-   for users that no longer have active CARRIER source rows.
+5. **Webhook authentication and signature verification.** Store and marketplace
+   webhooks should verify signed payloads or shared-secret headers, reject stale
+   timestamps, and record request provenance before mutating entitlement state.
 6. **Admin override endpoint.** Support teams usually need a controlled manual
    correction path when external channels disagree.
 7. **Kysely code generation.** Generating types from the live database after
    migrations would reduce schema/type drift.
 8. **Structured logging.** State transitions should emit structured records with
    `userId`, `source`, prior state, next state, and event IDs when available.
-9. **Outbox notifications.** The DB already stores notification intent in the
+9. **Observability & monitoring.** Add metrics, dashboards, traces, and alerts
+   for webhook failures, carrier API health, poller lag, notification delivery,
+   entitlement recompute latency, and canonical state churn.
+10. **Outbox notifications.** The DB already stores notification intent in the
    entitlement transaction. An outbox worker would make delivery to external
    email or push systems independently retryable.

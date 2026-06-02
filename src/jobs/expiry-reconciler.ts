@@ -38,7 +38,7 @@ export async function runExpiryReconciler(
   };
 
   for (const userId of candidateUserIds) {
-    const reconcileResult = await reconcileExpiredCanonical(options.db, userId);
+    const reconcileResult = await recomputeCanonicalForCandidate(options.db, userId, 'reconciled');
     if (reconcileResult === 'reconciled') {
       result.reconciledCount += 1;
     } else {
@@ -48,16 +48,4 @@ export async function runExpiryReconciler(
 
   options.logger?.debug(result, 'expiry reconciler run complete');
   return result;
-}
-
-/**
- * What: Recompute one expired canonical row if the user is not busy.
- * Why: The job should avoid waiting behind request-time mutations and let the next run
- * retry skipped users.
- */
-async function reconcileExpiredCanonical(
-  db: Kysely<Database>,
-  userId: string,
-): Promise<'reconciled' | 'skipped_busy'> {
-  return recomputeCanonicalForCandidate(db, userId, 'reconciled');
 }

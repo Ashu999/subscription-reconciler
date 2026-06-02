@@ -16,7 +16,6 @@ import { acquireUserEntitlementLock, getTransactionNow } from '../db/transaction
 import { CARRIER_POLL_BATCH_SIZE, CARRIER_POLL_CONCURRENCY } from '../domain/constants.js';
 import { recomputeCanonicalAndSyncNotifications } from '../engine/recompute.js';
 
-type CarrierPollOutcome = CarrierPlanStatus;
 type CarrierPollerLogger = Pick<FastifyBaseLogger, 'debug' | 'error' | 'warn'>;
 
 export interface RunCarrierPollerOptions {
@@ -108,9 +107,9 @@ interface PollClaimedUserInput {
  * Why: Active or uncertain responses only advance the schedule, while confirmed
  * inactive responses must revoke CARRIER access and recompute derived rows.
  */
-async function pollClaimedUser(input: PollClaimedUserInput): Promise<CarrierPollOutcome> {
+async function pollClaimedUser(input: PollClaimedUserInput): Promise<CarrierPlanStatus> {
   let shouldReleaseLease = true;
-  let outcome: CarrierPollOutcome = 'api_error';
+  let outcome: CarrierPlanStatus = 'api_error';
 
   try {
     const plan = await input.carrierClient.getPlan(input.userId);

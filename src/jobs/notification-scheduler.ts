@@ -39,7 +39,7 @@ export async function runNotificationScheduler(
   };
 
   for (const userId of candidateUserIds) {
-    const syncResult = await syncNotificationCandidate(options.db, userId);
+    const syncResult = await recomputeCanonicalForCandidate(options.db, userId, 'synced');
     if (syncResult === 'synced') {
       result.syncedCount += 1;
     } else {
@@ -49,16 +49,4 @@ export async function runNotificationScheduler(
 
   options.logger?.debug(result, 'notification scheduler run complete');
   return result;
-}
-
-/**
- * What: Recompute and sync reminders for one notification candidate.
- * Why: Re-reading canonical state under a user lock prevents stale rows from scheduling
- * reminders after another mutation changed entitlement access.
- */
-async function syncNotificationCandidate(
-  db: Kysely<Database>,
-  userId: string,
-): Promise<'synced' | 'skipped_busy'> {
-  return recomputeCanonicalForCandidate(db, userId, 'synced');
 }

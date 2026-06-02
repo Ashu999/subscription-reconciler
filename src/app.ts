@@ -16,6 +16,12 @@ import { registerStoreWebhookRoutes } from './routes/webhooks/store.js';
 export async function buildApp(db: Kysely<Database>, config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
     logger: config.nodeEnv !== 'test',
+    ajv: {
+      customOptions: {
+        coerceTypes: false,
+        removeAdditional: false,
+      },
+    },
   });
 
   await app.register(sensible);

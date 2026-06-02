@@ -8,8 +8,6 @@ export interface DueNotificationCandidate {
   expires_at: Date;
 }
 
-export type LockedDueNotification = DueNotificationCandidate;
-
 /**
  * What: Remove all unsent expiry reminders for a user.
  * Why: Once a user is inactive, expired, or open-ended, pending expiry reminders are stale.
@@ -92,8 +90,8 @@ export async function selectDueNotificationCandidates(
 export async function selectDueNotificationForUpdate(
   trx: Transaction<Database>,
   notificationId: string,
-): Promise<LockedDueNotification | undefined> {
-  const rows = await sql<LockedDueNotification>`
+): Promise<DueNotificationCandidate | undefined> {
+  const rows = await sql<DueNotificationCandidate>`
     select id, user_id, expires_at
     from notifications
     where id = ${notificationId}

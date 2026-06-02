@@ -1,4 +1,4 @@
-import type { ColumnType, Generated, Insertable, Selectable, Updateable } from 'kysely';
+import type { ColumnType, Generated, Insertable, Selectable } from 'kysely';
 
 import type {
   CanonicalEntitlementSource,
@@ -89,21 +89,12 @@ export interface Database {
 }
 
 export type SourceEntitlement = Selectable<SourceEntitlementsTable>;
-export type NewSourceEntitlement = Insertable<SourceEntitlementsTable>;
-export type SourceEntitlementUpdate = Updateable<SourceEntitlementsTable>;
 
 export type CanonicalEntitlement = Selectable<CanonicalEntitlementsTable>;
-export type NewCanonicalEntitlement = Insertable<CanonicalEntitlementsTable>;
-export type CanonicalEntitlementUpdate = Updateable<CanonicalEntitlementsTable>;
 
 export type StoreEvent = Selectable<StoreEventsTable>;
 export type NewStoreEvent = Insertable<StoreEventsTable>;
-export type StoreEventUpdate = Updateable<StoreEventsTable>;
 
 export type Notification = Selectable<NotificationsTable>;
-export type NewNotification = Insertable<NotificationsTable>;
-export type NotificationUpdate = Updateable<NotificationsTable>;
 
 export type CarrierPollLock = Selectable<CarrierPollLocksTable>;
-export type NewCarrierPollLock = Insertable<CarrierPollLocksTable>;
-export type CarrierPollLockUpdate = Updateable<CarrierPollLocksTable>;

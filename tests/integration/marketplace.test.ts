@@ -1,3 +1,4 @@
+import type { InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getTransactionNow } from '../../src/db/transactions.js';
 import {
@@ -21,6 +22,8 @@ interface MarketplaceRevokeOkResponse {
   uniqueUserCount: number;
   revokedCount: number;
 }
+
+type MarketplaceInjectPayload = NonNullable<InjectOptions['payload']>;
 
 describe('POST /webhooks/marketplace/revoke', () => {
   let harness: IntegrationHarness | undefined;
@@ -149,6 +152,40 @@ describe('POST /webhooks/marketplace/revoke', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it('rejects malformed revoke requests before changing marketplace rows', async () => {
+    const currentHarness = requireHarness(harness);
+    const userId = 'user_marketplace_validation';
+    await seedSource(currentHarness, marketplaceGrant(userId));
+
+    const cases: Array<{ name: string; payload: MarketplaceInjectPayload }> = [
+      {
+        name: 'missing userIds',
+        payload: {},
+      },
+      {
+        name: 'userIds is not an array',
+        payload: { userIds: userId },
+      },
+      {
+        name: 'blank user ID',
+        payload: { userIds: [userId, ''] },
+      },
+      {
+        name: 'unknown property',
+        payload: { userIds: [userId], ignored: true },
+      },
+    ];
+
+    for (const currentCase of cases) {
+      const response = await postMarketplaceRevokePayload(currentHarness, currentCase.payload);
+      expect(response.statusCode, currentCase.name).toBe(400);
+    }
+
+    const source = await selectSource(currentHarness, userId, 'MARKETPLACE');
+    expect(source.active).toBe(true);
+    expect(source.reason).toBe('MARKETPLACE_GRANT');
+  });
+
   it('falls back to STORE when a dual-source user loses MARKETPLACE access', async () => {
     const currentHarness = requireHarness(harness);
     const userId = 'user_store_marketplace';
@@ -177,11 +214,21 @@ describe('POST /webhooks/marketplace/revoke', () => {
   });
 });
 
-function postMarketplaceRevoke(harness: IntegrationHarness, userIds: string[]) {
+function postMarketplaceRevoke(
+  harness: IntegrationHarness,
+  userIds: string[],
+): Promise<LightMyRequestResponse> {
+  return postMarketplaceRevokePayload(harness, { userIds });
+}
+
+function postMarketplaceRevokePayload(
+  harness: IntegrationHarness,
+  payload: MarketplaceInjectPayload,
+): Promise<LightMyRequestResponse> {
   return harness.app.inject({
     method: 'POST',
     url: '/webhooks/marketplace/revoke',
-    payload: { userIds },
+    payload,
   });
 }
 
