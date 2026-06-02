@@ -1,0 +1,33 @@
+name: Checks and Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks-tests:
+    name: Run checks and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Verify Docker access
+        run: docker version
+
+      - name: Run tests
+        run: npm test
