@@ -14,6 +14,7 @@ import type {
 type TimestampColumn = ColumnType<Date, Date | string, Date | string>;
 type NullableTimestampColumn = ColumnType<Date | null, Date | string | null, Date | string | null>;
 type DefaultTimestampColumn = ColumnType<Date, Date | string | undefined, Date | string>;
+type AuditTimestampColumn = ColumnType<Date, Date | string | undefined, never>;
 // pg may surface bigint-like values as strings, so conversion happens explicitly
 // before reducer code treats event times as JavaScript numbers.
 type BigIntColumn = ColumnType<
@@ -31,6 +32,8 @@ export interface SourceEntitlementsTable {
   reason: EntitlementReason;
   last_event_ms: BigIntColumn;
   last_event_id: string | null;
+  created_at: AuditTimestampColumn;
+  updated_at: AuditTimestampColumn;
 }
 
 export interface CanonicalEntitlementsTable {
@@ -40,6 +43,8 @@ export interface CanonicalEntitlementsTable {
   expires_at: NullableTimestampColumn;
   last_changed_at: NullableTimestampColumn;
   reason: EntitlementReason;
+  created_at: AuditTimestampColumn;
+  updated_at: AuditTimestampColumn;
 }
 
 export interface StoreEventsTable {
@@ -58,6 +63,8 @@ export interface NotificationsTable {
   expires_at: TimestampColumn;
   scheduled_for: TimestampColumn;
   sent_at: NullableTimestampColumn;
+  created_at: AuditTimestampColumn;
+  updated_at: AuditTimestampColumn;
 }
 
 export interface CarrierPollLocksTable {
